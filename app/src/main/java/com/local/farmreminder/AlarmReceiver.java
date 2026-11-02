@@ -32,7 +32,10 @@ public class AlarmReceiver extends BroadcastReceiver {
             manager.createNotificationChannel(channel);
             channel = manager.getNotificationChannel(CHANNEL_ID);
             if (channel == null || channel.getImportance() == NotificationManager.IMPORTANCE_NONE) return;
-            PendingIntent open = PendingIntent.getActivity(context, 0, new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+            Intent launch = context.getPackageManager().getLaunchIntentForPackage("com.tencent.mm");
+            if (launch == null) launch = new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            PendingIntent open = PendingIntent.getActivity(context, 0, launch, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
             Notification n = new Notification.Builder(context, CHANNEL_ID).setSmallIcon(android.R.drawable.ic_dialog_info)
                     .setContentTitle("农场提醒").setContentText(r == null ? "测试提醒" : r.friend + "的农作物即将成熟")
                     .setContentIntent(open).setAutoCancel(true).build();
