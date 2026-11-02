@@ -5,8 +5,11 @@ import java.util.ArrayDeque;
 /** Main-thread-only bounded FIFO; in-flight work keeps its own resource until completion. */
 final class FramePipeline<T> {
     interface Disposer<T> { void dispose(T value); }
-    static final int MAX_COUNT = 3;
-    static final long MAX_BYTES = 32L * 1024 * 1024, TTL_MS = 3000, REQUEST_TIMEOUT_MS = 12000;
+    static final int MAX_COUNT = 12;
+    static final long MAX_BYTES = 96L * 1024 * 1024, TTL_MS = 8000, REQUEST_TIMEOUT_MS = 12000;
+    static long memoryBudget(long maxMemory) {
+        return Math.max(8L * 1024 * 1024, Math.min(MAX_BYTES, maxMemory / 4));
+    }
     static final class Frame<T> {
         final T value; final long bytes, wall, uptime, request; final int generation, window;
         Frame(T value, long bytes, long wall, long uptime, int generation, int window, long request) {
@@ -15,13 +18,19 @@ final class FramePipeline<T> {
         }
     }
     private final Disposer<T> disposer;
+    final int maxCount;
+    final long maxBytes, ttlMs;
     private final ArrayDeque<Frame<T>> pending = new ArrayDeque<>();
     private long nextId, captureId, ocrId, bytes, captureStarted, ocrStarted;
     private long timedOutCapture, timedOutOcr;
     private Frame<T> activeOcr;
     long dropFull, dropExpired, dropInvalidated, lastQueueWaitMs;
     int maxQueueObserved;
-    FramePipeline(Disposer<T> disposer) { this.disposer=disposer; }
+    FramePipeline(Disposer<T> disposer) { this(disposer, MAX_COUNT, memoryBudget(Runtime.getRuntime().maxMemory()), TTL_MS); }
+    FramePipeline(Disposer<T> disposer, int maxCount, long maxBytes, long ttlMs) {
+        if (maxCount <= 0 || maxBytes <= 0 || ttlMs < 0) throw new IllegalArgumentException();
+        this.disposer=disposer; this.maxCount=maxCount; this.maxBytes=maxBytes; this.ttlMs=ttlMs;
+    }
     long beginCapture(long now) { if (!startAllowed() || captureId != 0) return 0; captureStarted=now; return captureId=++nextId; }
     boolean endCapture(long id) { if (id == 0 || captureId != id) return false; captureId=0; if (timedOutCapture == id) timedOutCapture=0; return true; }
     boolean captureUsable(long id) { return id != 0 && captureId == id && timedOutCapture != id; }
@@ -49,10 +58,15 @@ final class FramePipeline<T> {
     boolean ocrBusy() { return ocrId != 0; }
     int pendingCount() { return pending.size(); }
     long pendingBytes() { return bytes; }
+    long dropped() { return dropFull + dropExpired + dropInvalidated; }
+    OcrProgress progress(long processed, long captured, long droppedBaseline) {
+        return new OcrProgress(processed, captured, dropped()-droppedBaseline, pendingCount(), bytes,
+                ocrBusy(), maxCount, maxBytes, ttlMs);
+    }
     void offer(Frame<T> f, long now) {
         expire(now);
-        if (f.bytes <= 0 || f.bytes > MAX_BYTES) { dropFull++; disposer.dispose(f.value); return; }
-        while (pending.size() >= MAX_COUNT || bytes > MAX_BYTES-f.bytes) { dropFull++; remove(); }
+        if (f.bytes <= 0 || f.bytes > maxBytes) { dropFull++; disposer.dispose(f.value); return; }
+        while (pending.size() >= maxCount || bytes > maxBytes-f.bytes) { dropFull++; remove(); }
         pending.addLast(f); bytes += f.bytes; maxQueueObserved=Math.max(maxQueueObserved,pending.size());
     }
     Frame<T> beginOcr(long now) {
@@ -70,7 +84,7 @@ final class FramePipeline<T> {
     }
     void clear() { while (!pending.isEmpty()) { dropInvalidated++; remove(); } }
     private void expire(long now) {
-        while (!pending.isEmpty() && (now < pending.peekFirst().uptime || now-pending.peekFirst().uptime > TTL_MS)) {
+        while (!pending.isEmpty() && (now < pending.peekFirst().uptime || now-pending.peekFirst().uptime > ttlMs)) {
             dropExpired++; remove();
         }
     }

@@ -61,6 +61,13 @@ public class FarmAccessibilityService extends AccessibilityService {
     private long sceneEnters, sceneExits, recognizedEvents, saveFailures;
     private TextRecognizer recognizer;
     private static final FramePipeline<Bitmap> pipeline = new FramePipeline<>(Bitmap::recycle);
+    // All writes on the main thread; readers only see an immutable volatile snapshot.
+    private static long progressProcessed, progressCaptured, progressDropBaseline;
+    private static volatile OcrProgress ocrProgress = pipeline.progress(0, 0, 0);
+    public static OcrProgress getOcrProgress() { return ocrProgress; }
+    private static void updateProgress() {
+        ocrProgress = pipeline.progress(progressProcessed, progressCaptured, progressDropBaseline);
+    }
     private boolean foreground, farm, destroyed, receiverRegistered, closeRecognizerWhenIdle;
     private long nextCaptureAllowed, lastCaptureUptime = -1, captureInterval, lastProcessedRequest;
     private static long ocrStartedUptime;
@@ -84,6 +91,7 @@ public class FarmAccessibilityService extends AccessibilityService {
 
     // Only immutable, anonymous data captured on the main thread is read by dump's binder thread.
     private void snapshot() {
+        updateProgress();
         if (!debugEnabled()) return;
         dumpSnapshot = "pid=" + Process.myPid() + " instance=" + instanceSequence
                 + " generation=" + policy.generation() + " owner=" + (instance == this)
@@ -163,6 +171,7 @@ public class FarmAccessibilityService extends AccessibilityService {
         handler.removeCallbacks(sample); policy.invalidate(); pipeline.clear(); logic.reset(); farm = false; foreground = false; windowId = -1;
         instance = this; isConnected = true; isRunning = false;
         if (previous != null && previous != this) { previous.retire(); previous.snapshot(); }
+        progressProcessed = 0; progressCaptured = 0; progressDropBaseline = pipeline.dropped();
         getSharedPreferences("settings", MODE_PRIVATE).edit().putBoolean("monitoringEnabled", false).apply();
         closeRecognizerWhenIdle = false;
         if (recognizer == null && !pipeline.ocrBusy()) recognizer = TextRecognition.getClient(new ChineseTextRecognizerOptions.Builder().build());
@@ -343,7 +352,7 @@ public class FarmAccessibilityService extends AccessibilityService {
                     long callbackUptime = SystemClock.uptimeMillis(), callbackWall = System.currentTimeMillis();
                     long capturedUptime = FramePipeline.captureUptime(result.getTimestamp(), requestUptime, callbackUptime);
                     long capturedWall = FramePipeline.captureWall(result.getTimestamp(), requestUptime, requestWall, callbackUptime, callbackWall);
-                    screenshots++;
+                    screenshots++; progressCaptured++;
                     hardware = Bitmap.wrapHardwareBuffer(buffer, result.getColorSpace());
                     if (hardware == null) throw new IllegalStateException("empty screenshot");
                     copy = hardware.copy(Bitmap.Config.ARGB_8888, false);
@@ -383,14 +392,17 @@ public class FarmAccessibilityService extends AccessibilityService {
         if (!alive() || !isRunning || !foreground || pipeline.ocrBusy() || !pipeline.startAllowed()) return;
         if (recognizer == null) recognizer = TextRecognition.getClient(new ChineseTextRecognizerOptions.Builder().build());
         FramePipeline.Frame<Bitmap> frame = pipeline.beginOcr(SystemClock.uptimeMillis());
+        updateProgress();
         if (frame == null) return;
-        if (!valid(frame.generation, frame.window)) { pipeline.finishOcr(frame.request); pumpOcr(); return; }
+        if (!valid(frame.generation, frame.window)) { pipeline.finishOcr(frame.request); updateProgress(); pumpOcr(); return; }
         ocrOwner = this;
         ocrStartedUptime = SystemClock.uptimeMillis();
         armWatchdog(false, frame.request, ocrStartedUptime);
         try {
             recognizer.process(InputImage.fromBitmap(frame.value, 0)).addOnCompleteListener(mainExecutor, task -> {
                 try {
+                    progressProcessed++;
+                    updateProgress();
                     checkTimeouts();
                     if (!pipeline.ocrUsable(frame.request)) return;
                     if (!valid(frame.generation, frame.window)) return;
@@ -428,6 +440,7 @@ public class FarmAccessibilityService extends AccessibilityService {
     private void finishOcr(FramePipeline.Frame<Bitmap> frame) {
         boolean timedOut = pipeline.ocrTimedOut() && !pipeline.ocrUsable(frame.request);
         if (!pipeline.finishOcr(frame.request)) return;
+        updateProgress();
         ocrStartedUptime = 0; ocrOwner = null;
         if (closeRecognizerWhenIdle && recognizer != null) { recognizer.close(); recognizer = null; }
         recoveredAfterTimeout(timedOut);
@@ -476,7 +489,8 @@ public class FarmAccessibilityService extends AccessibilityService {
                 + " · 无成熟时间 " + rejectedTime + " · 候选 " + candidates + " · 新增 " + added
                 + " · 重复 " + duplicate + " · 截图错误 " + errors
                 + "\n截图中 " + pipeline.captureBusy() + " · OCR中 " + pipeline.ocrBusy() + " · 待识别 " + pipeline.pendingCount()
-                + " / " + pipeline.pendingBytes() + "B · 队列峰值 " + pipeline.maxQueueObserved
+                 + " / " + pipeline.pendingBytes() + "B · 队列峰值 " + pipeline.maxQueueObserved
+                 + " · 待处理上限 " + pipeline.maxCount + "帧/" + pipeline.maxBytes + "B · 有效期 " + pipeline.ttlMs + "ms"
                 + " · 丢弃(满/过期/失效) " + pipeline.dropFull + "/" + pipeline.dropExpired + "/" + pipeline.dropInvalidated
                 + " · 截图间隔 " + captureInterval + "ms · 排队 " + pipeline.lastQueueWaitMs + "ms"
                 + "\n农场画面 " + scene.present() + " · 进入/退出 " + sceneEnters + "/" + sceneExits
@@ -502,6 +516,7 @@ public class FarmAccessibilityService extends AccessibilityService {
             lastStatus = pipeline.startAllowed() ? "服务断开，请重新启动监测" : blockedStatus();
         }
         handler.removeCallbacks(sample); policy.invalidate(); if (owner) pipeline.clear(); logic.reset();
+        if (owner) updateProgress();
         if (receiverRegistered) { try { unregisterReceiver(screenReceiver); } catch (IllegalArgumentException ignored) { } receiverRegistered = false; }
         if (recognizer != null) { if (ocrOwner == this) closeRecognizerWhenIdle = true; else { recognizer.close(); recognizer = null; } }
         snapshot(); diagLog("destroy");

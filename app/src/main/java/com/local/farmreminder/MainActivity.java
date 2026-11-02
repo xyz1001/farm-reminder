@@ -39,6 +39,7 @@ public class MainActivity extends Activity {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final List<Button> leadButtons = new ArrayList<>();
     private TextView runningLabel, captureStatus, diagnosticsText, feedback, notificationStatus, exactStatus, listTitle;
+    private TextView processedCount, pendingCount, ocrState, queueDetails;
     private Button startButton, stopButton, notificationButton, exactButton, clearButton;
     private LinearLayout reminders;
     private SharedPreferences settings;
@@ -102,6 +103,16 @@ public class MainActivity extends Activity {
         addText(capture, "可自行选择启用无障碍服务：用于读取前台窗口线索，并获取本地单张截图来识别倒计时。不自动点击、不上传、不保存截图。", 14, MUTED, false, 9);
         addText(capture, "启用服务后，仍需手动开始监测。离开微信暂停；小游戏窗口身份待验证，可能需要少量画面探测。请保持好友名和成熟倒计时清晰可见。", 13, MUTED, false, 9);
         captureStatus = addText(capture, "未运行", 13, INK, false, 14);
+        LinearLayout progress = column();
+        progress.setPadding(dp(14), dp(14), dp(14), dp(14));
+        progress.setBackground(background(0xFFF7FAF3, 14, 0xFFD6E2D1));
+        capture.addView(progress, spaced(-1, -2, 14));
+        addText(progress, "OCR 处理进度", 12, GREEN, true, 0);
+        processedCount = addText(progress, "已识别 0 张", 21, INK, true, 8);
+        pendingCount = addText(progress, "待识别 0 张", 21, GREEN, true, 4);
+        ocrState = addText(progress, "暂无正在识别的画面", 13, GREEN, false, 9);
+        addText(progress, "已识别指完成 OCR 处理，不代表已添加提醒。待识别仅计排队画面，不含正在识别的 1 张。", 12, MUTED, false, 8);
+        queueDetails = addText(progress, "", 12, MUTED, false, 8);
         startButton = button(capture, "检查无障碍设置", true, 16, this::requestMonitoring);
         stopButton = button(capture, "停止监测", false, 8, () -> {
             try {
@@ -283,6 +294,18 @@ public class MainActivity extends Activity {
                 : running ? "●  监测已开启 · 离开微信暂停" : "○  监测未启动");
         String status = FarmAccessibilityService.lastStatus;
         captureStatus.setText(readiness + "\n监测状态：" + (blank(status) ? "未运行" : status));
+        OcrProgress progress = FarmAccessibilityService.getOcrProgress();
+        processedCount.setText("已识别 " + progress.processed + " 张");
+        pendingCount.setText("待识别 " + progress.queued + " 张");
+        ocrState.setText(progress.recognizing ? "正在识别 1 张 · 不计入待识别"
+                : !connected ? "服务未连接 · 暂无正在识别的画面"
+                : !running ? "监测未启动 · 暂无正在识别的画面"
+                : "暂无正在识别的画面");
+        queueDetails.setText(String.format(Locale.CHINA,
+                "队列内存 %.1f / %.1f MiB\n队列最多 %d 张 · 已丢弃 %d 张",
+                progress.pendingBytes / (1024f * 1024f),
+                progress.maxPendingBytes / (1024f * 1024f),
+                progress.maxPendingFrames, progress.dropped));
         String diagnostics = FarmAccessibilityService.diagnostics;
         diagnosticsText.setText(blank(diagnostics) ? "暂无诊断数据。开始后可查看截图计数、OCR 处理与拒绝原因；不展示原图或完整识别文本。" : diagnostics);
         startButton.setEnabled(supported && !running && (!enabled || connected));

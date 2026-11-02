@@ -7,7 +7,7 @@ import static org.junit.Assert.*;
 
 public class FramePipelineTest {
     private final List<Integer> recycled = new ArrayList<>();
-    private final FramePipeline<Integer> p = new FramePipeline<>(recycled::add);
+    private final FramePipeline<Integer> p = new FramePipeline<>(recycled::add, 3, 32L*1024*1024, 3000);
     private FramePipeline.Frame<Integer> capture(int value, long time, long bytes, int generation) {
         long id=p.beginCapture(time); assertNotEquals(0,id); assertTrue(p.endCapture(id));
         return new FramePipeline.Frame<>(value,bytes,10000+time,time,generation,1,id);
@@ -28,7 +28,7 @@ public class FramePipelineTest {
         p.offer(capture(4,10,20L*1024*1024,2),10);
         p.offer(capture(5,11,20L*1024*1024,2),11);
         assertEquals(1,p.pendingCount()); assertEquals(Integer.valueOf(4),recycled.get(4));
-        p.offer(capture(6,12,FramePipeline.MAX_BYTES+1,2),12);
+        p.offer(capture(6,12,32L*1024*1024+1,2),12);
         assertEquals(Integer.valueOf(6),recycled.get(5)); assertEquals(20L*1024*1024,p.pendingBytes());
         assertEquals(3,p.maxQueueObserved);
     }
@@ -98,5 +98,45 @@ public class FramePipelineTest {
         assertFalse(p.endCapture(old)); assertFalse(p.timeoutCapture(old,24202));
         assertTrue(p.captureUsable(fresh)); assertTrue(p.endCapture(fresh));
         assertTrue(p.startAllowed()); assertEquals(0,p.pendingCount());
+    }
+    @Test public void dynamicBudgetClampsLowAndHighHeap() {
+        long mib=1024L*1024;
+        assertEquals(64*mib, FramePipeline.memoryBudget(256*mib));
+        assertEquals(96*mib, FramePipeline.memoryBudget(512*mib));
+        assertEquals(8*mib, FramePipeline.memoryBudget(16*mib));
+    }
+    @Test public void defaultCountCapDropsOldestAndClearCountsInvalidated() {
+        FramePipeline<Integer> q=new FramePipeline<>(recycled::add,12,100,8000);
+        for (int i=0;i<13;i++) q.offer(new FramePipeline.Frame<>(i,1,0,i,1,1,i+1),i);
+        assertEquals(12,q.pendingCount()); assertEquals(List.of(0),recycled);
+        q.clear(); assertEquals(0,q.pendingCount()); assertEquals(13,q.dropped());
+        assertEquals(13,recycled.size());
+    }
+    @Test public void byteCapAndOversizeDropWithoutExceedingBudget() {
+        FramePipeline<Integer> q=new FramePipeline<>(recycled::add,12,10,8000);
+        q.offer(new FramePipeline.Frame<>(1,6,0,0,1,1,1),0);
+        q.offer(new FramePipeline.Frame<>(2,6,0,1,1,1,2),1);
+        q.offer(new FramePipeline.Frame<>(3,11,0,2,1,1,3),2);
+        assertEquals(6,q.pendingBytes()); assertEquals(1,q.pendingCount());
+        assertEquals(List.of(1,3),recycled); assertEquals(2,q.dropFull);
+    }
+    @Test public void eightSecondTtlIsInclusive() {
+        FramePipeline<Integer> q=new FramePipeline<>(recycled::add,12,100,8000);
+        q.offer(new FramePipeline.Frame<>(1,1,0,0,1,1,1),0);
+        assertNotNull(q.beginOcr(8000)); assertTrue(q.finishOcr(1));
+        q.offer(new FramePipeline.Frame<>(2,1,0,0,1,1,2),0);
+        assertNull(q.beginOcr(8001)); assertEquals(1,q.dropExpired);
+    }
+    @Test public void progressSeparatesPendingFromActiveAndClearPreservesActive() {
+        FramePipeline<Integer> q=new FramePipeline<>(recycled::add,12,100,8000);
+        q.offer(new FramePipeline.Frame<>(1,10,0,0,1,1,1),0);
+        q.offer(new FramePipeline.Frame<>(2,20,0,0,1,1,2),0);
+        q.beginOcr(0);
+        OcrProgress s=q.progress(4,6,0);
+        assertEquals(4,s.processed); assertEquals(6,s.captured); assertEquals(1,s.queued);
+        assertEquals(20,s.pendingBytes); assertTrue(s.recognizing);
+        q.clear(); s=q.progress(4,6,0);
+        assertEquals(0,s.queued); assertEquals(0,s.pendingBytes); assertTrue(s.recognizing); assertEquals(1,s.dropped);
+        assertTrue(q.finishOcr(1)); assertFalse(q.progress(5,6,0).recognizing);
     }
 }
