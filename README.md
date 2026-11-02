@@ -31,3 +31,9 @@ adb shell dumpsys activity service com.local.farmreminder/.FarmAccessibilityServ
 ## 构建
 
 需要 JDK 17、Android SDK 35、Gradle 8.11.1。配置本机 `local.properties` 或 `ANDROID_HOME`，运行 `gradle :app:assembleDebug` 和 `gradle :app:testDebugUnitTest`，也可使用仓库提供的 Gradle wrapper。不要提交 local.properties、构建产物或用户数据。
+
+### 私有截图的无界面 OCR 回放
+
+仅在用户授权后，将待测截图命名为 `farm-friend-readonly.png` 放入仓库外的独立目录（目录中不要放其他文件），以 `gradle :app:assembleDebugAndroidTest -PocrFixtureDir=<目录>` 打包测试 APK。测试 APK 包含完整私有截图，不可提交或分享。安装测试 APK 后，可用 `adb shell am instrument -w -e left <左> -e top <上> -e right <右> -e bottom <下> com.local.farmreminder.test/com.local.farmreminder.FixtureOcrInstrumentation` 回放；坐标是截图像素中的倒计时区域。它不启动 Activity 或使用 UI 自动化，输出区域内行和元素的位置，以及仅保留数字、冒号和“后成熟”的脱敏文本和全帧解析结果。普通单元测试不需要此截图。
+
+Instrumentation 会重启目标应用进程，可能中断已有监测会话；不要在需要保留会话时运行。完成后，按授权范围处理测试 APK 和临时截图，其内部可能仍含私有画面。

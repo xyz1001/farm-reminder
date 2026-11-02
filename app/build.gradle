@@ -3,7 +3,10 @@ plugins { id 'com.android.application' }
 android {
     namespace 'com.local.farmreminder'
     compileSdk 35
-    defaultConfig { applicationId 'com.local.farmreminder'; minSdk 26; targetSdk 35; versionCode 1; versionName '1.0' }
+    defaultConfig { applicationId 'com.local.farmreminder'; minSdk 26; targetSdk 35; versionCode 1; versionName '1.0'; testInstrumentationRunner 'com.local.farmreminder.FixtureOcrInstrumentation' }
+    if (project.hasProperty('ocrFixtureDir')) {
+        sourceSets.androidTest.assets.srcDir(project.property('ocrFixtureDir'))
+    }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
 }
 dependencies {
