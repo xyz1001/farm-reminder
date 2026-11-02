@@ -56,6 +56,9 @@ public class FarmAccessibilityService extends AccessibilityService {
     private final Executor mainExecutor = handler::post;
     private final SamplingPolicy policy = new SamplingPolicy();
     private final RecognitionLogic logic = new RecognitionLogic();
+    private final ScenePresence scene = new ScenePresence();
+    private final FeedbackEventPolicy feedback = new FeedbackEventPolicy();
+    private long sceneEnters, sceneExits, recognizedEvents, saveFailures;
     private TextRecognizer recognizer;
     private static final FramePipeline<Bitmap> pipeline = new FramePipeline<>(Bitmap::recycle);
     private boolean foreground, farm, destroyed, receiverRegistered, closeRecognizerWhenIdle;
@@ -98,6 +101,8 @@ public class FarmAccessibilityService extends AccessibilityService {
                 + " lastError=" + lastError + " rejectedFriend=" + rejectedFriend
                 + " rejectedTime=" + rejectedTime + " candidates=" + candidates
                 + " added=" + added + " duplicate=" + duplicate + " reason=" + reason
+                + " scenePresent=" + scene.present() + " sceneEnters=" + sceneEnters + " sceneExits=" + sceneExits
+                + " recognizedEvents=" + recognizedEvents + " saveFailures=" + saveFailures
                 + " connectedSeq=" + connectedSequence + " connectedElapsedMs=" + connectedAt
                 + " unbindSeq=" + unbindSequence + " unbindElapsedMs=" + unbindAt
                 + " destroySeq=" + destroySequence + " destroyElapsedMs=" + destroyAt
@@ -154,6 +159,7 @@ public class FarmAccessibilityService extends AccessibilityService {
         connectedSequence = ++lifecycleSequence; connectionCount++;
         connectedAt = SystemClock.elapsedRealtime();
         FarmAccessibilityService previous = instance;
+        if (previous == this) leaveScene();
         handler.removeCallbacks(sample); policy.invalidate(); pipeline.clear(); logic.reset(); farm = false; foreground = false; windowId = -1;
         instance = this; isConnected = true; isRunning = false;
         if (previous != null && previous != this) { previous.retire(); previous.snapshot(); }
@@ -177,6 +183,7 @@ public class FarmAccessibilityService extends AccessibilityService {
 
     private void setRunning(boolean running) {
         if (!alive()) return;
+        leaveScene();
         pipeline.updateTimeouts(SystemClock.uptimeMillis());
         running = running && pipeline.startAllowed();
         getSharedPreferences("settings", MODE_PRIVATE).edit().putBoolean("monitoringEnabled", running).apply();
@@ -204,6 +211,7 @@ public class FarmAccessibilityService extends AccessibilityService {
     }
 
     private void retire() {
+        leaveScene();
         handler.removeCallbacks(sample); policy.invalidate(); pipeline.clear(); logic.reset(); foreground = false; farm = false;
         if (receiverRegistered) { try { unregisterReceiver(screenReceiver); } catch (IllegalArgumentException ignored) { } receiverRegistered = false; }
         if (recognizer != null) { if (ocrOwner == this) closeRecognizerWhenIdle = true; else { recognizer.close(); recognizer = null; } }
@@ -266,6 +274,8 @@ public class FarmAccessibilityService extends AccessibilityService {
         catch (RuntimeException e) { current = -1; }
         boolean now = current != -1;
         if (foreground != now || (now && current != windowId)) {
+            if (!now) leaveScene();
+            else scene.breakStreak();
             policy.invalidate(); pipeline.clear(); logic.reset(); farm = false;
             if (!now && foreground) paused++;
             foreground = now; windowId = current;
@@ -432,6 +442,9 @@ public class FarmAccessibilityService extends AccessibilityService {
             Rect box = line.getBoundingBox();
             if (box != null) lines.add(new OcrLine(line.getText(), box.left, box.top, box.right, box.bottom));
         }
+        ScenePresence.Change change = scene.observe(ScenePresence.isFarmScene(lines, width, height));
+        if (change == ScenePresence.Change.ENTER) { sceneEnters++; MonitorFeedback.entered(this); }
+        else if (change == ScenePresence.Change.EXIT) { sceneExits++; feedback.reset(); MonitorFeedback.exited(this); }
         String friend = OcrFrameParser.friend(lines, width, height);
         Long countdown = OcrFrameParser.countdown(lines);
         if (friend != null) { farm = true; farmSeen = SystemClock.elapsedRealtime(); }
@@ -441,12 +454,19 @@ public class FarmAccessibilityService extends AccessibilityService {
         else if (countdown == null || countdown <= 0) { rejectedTime++; reason = "无明确有效成熟时间（阶段时间不录入）"; }
         else if (maturity == null) { candidates++; reason = "候选等待连续帧确认"; }
         else if (valid(token, target)) {
+            if (feedback.confirmed(friend, maturity)) { recognizedEvents++; MonitorFeedback.recognized(this); }
             int lead = getSharedPreferences("settings", MODE_PRIVATE).getInt("leadSeconds", 60);
-            Reminder r = new ReminderStore(this).addIfNew(friend, maturity, lead);
-            if (r == null) { duplicate++; reason = "重复记录"; }
-            else { added++; reason = "新增提醒"; new AlarmScheduler(this).schedule(r); }
+            ReminderStore.AddResult result = new ReminderStore(this).addIfNew(friend, maturity, lead);
+            if (result.outcome == SaveOutcome.DUPLICATE) { duplicate++; reason = "重复记录"; }
+            else if (result.outcome == SaveOutcome.FAILED) { saveFailures++; lastError = "save_failed"; reason = "提醒保存失败"; MonitorFeedback.saveFailed(this); }
+            else { added++; reason = "新增提醒"; MonitorFeedback.added(this); new AlarmScheduler(this).schedule(result.reminder); }
         }
         lastStatus = reason;
+    }
+
+    private void leaveScene() {
+        if (scene.leave() == ScenePresence.Change.EXIT) { sceneExits++; MonitorFeedback.exited(this); }
+        feedback.reset();
     }
 
     private void publish() {
@@ -458,7 +478,9 @@ public class FarmAccessibilityService extends AccessibilityService {
                 + "\n截图中 " + pipeline.captureBusy() + " · OCR中 " + pipeline.ocrBusy() + " · 待识别 " + pipeline.pendingCount()
                 + " / " + pipeline.pendingBytes() + "B · 队列峰值 " + pipeline.maxQueueObserved
                 + " · 丢弃(满/过期/失效) " + pipeline.dropFull + "/" + pipeline.dropExpired + "/" + pipeline.dropInvalidated
-                + " · 截图间隔 " + captureInterval + "ms · 排队 " + pipeline.lastQueueWaitMs + "ms\n" + reason;
+                + " · 截图间隔 " + captureInterval + "ms · 排队 " + pipeline.lastQueueWaitMs + "ms"
+                + "\n农场画面 " + scene.present() + " · 进入/退出 " + sceneEnters + "/" + sceneExits
+                + " · 识别反馈 " + recognizedEvents + " · 保存失败 " + saveFailures + "\n" + reason;
         snapshot();
         long now = SystemClock.elapsedRealtime();
         if (debugEnabled() && now - lastSummaryLog >= 5000) {
@@ -472,6 +494,7 @@ public class FarmAccessibilityService extends AccessibilityService {
         boolean owner = alive();
         destroySequence = ++lifecycleSequence; destroyCount++;
         destroyAt = SystemClock.elapsedRealtime();
+        if (owner) leaveScene();
         destroyed = true;
         if (owner) {
             isRunning = false; isConnected = false; instance = null;
