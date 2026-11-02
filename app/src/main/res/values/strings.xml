@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="farm_accessibility_description">由你自行选择启用，用于读取前台窗口线索，并通过本地单张截图识别农场成熟倒计时。不自动点击、不上传、不保存截图。启用服务后仍需在应用中手动开始监测；离开微信暂停，小游戏窗口身份待验证，可能需要少量画面探测。截图功能需要 Android 11 及以上，可随时停止监测或在系统设置中关闭服务。</string>
+</resources>

@@ -11,7 +11,6 @@ import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
-import android.media.projection.MediaProjectionManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -32,21 +31,21 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 
-/** A local-only dashboard. Screen capture and notification permission are independent. */
+/** A local-only dashboard. Accessibility monitoring and reminders are independent. */
 public class MainActivity extends Activity {
-    private static final int SCREEN_CAPTURE = 101, NOTIFICATIONS = 102;
+    private static final int NOTIFICATIONS = 102;
     private static final int INK = 0xFF20382D, GREEN = 0xFF276344;
     private static final int MUTED = 0xFF657367, PAPER = 0xFFF7F6EF;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final List<Button> leadButtons = new ArrayList<>();
-    private TextView runningLabel, captureStatus, feedback, notificationStatus, exactStatus, listTitle;
+    private TextView runningLabel, captureStatus, diagnosticsText, feedback, notificationStatus, exactStatus, listTitle;
     private Button startButton, stopButton, notificationButton, exactButton, clearButton;
     private LinearLayout reminders;
     private SharedPreferences settings;
     private ReminderStore store;
     private AlarmScheduler scheduler;
     private int leadSeconds;
-    private boolean capturePending, resumed;
+    private boolean resumed;
     private String listSignature = "";
     private final Runnable ticker = new Runnable() {
         @Override public void run() {
@@ -61,7 +60,6 @@ public class MainActivity extends Activity {
         settings = getSharedPreferences("settings", MODE_PRIVATE);
         leadSeconds = settings.getInt("leadSeconds", 60);
         if (leadSeconds != 0 && leadSeconds != 60 && leadSeconds != 300) leadSeconds = 60;
-        capturePending = state != null && state.getBoolean("capturePending", false);
         store = new ReminderStore(this);
         scheduler = new AlarmScheduler(this);
         getWindow().setStatusBarColor(PAPER);
@@ -99,26 +97,35 @@ public class MainActivity extends Activity {
         addText(page, "看清成熟时间，再安心离开。", 15, MUTED, false, 7);
 
         LinearLayout capture = card(page, 24, 0xFFE9EFE5);
-        runningLabel = addText(capture, "●  识别未启动", 13, GREEN, true, 0);
-        addText(capture, "记录屏幕上的成熟倒计时", 20, INK, true, 12);
-        addText(capture, "启动并授权后，切换到好友农场，保持好友名和成熟倒计时清晰可见。", 14, MUTED, false, 9);
+        runningLabel = addText(capture, "○  监测未启动", 13, GREEN, true, 0);
+        addText(capture, "记录好友农场的成熟时间", 20, INK, true, 12);
+        addText(capture, "可自行选择启用无障碍服务：用于读取前台窗口线索，并获取本地单张截图来识别倒计时。不自动点击、不上传、不保存截图。", 14, MUTED, false, 9);
+        addText(capture, "启用服务后，仍需手动开始监测。离开微信暂停；小游戏窗口身份待验证，可能需要少量画面探测。请保持好友名和成熟倒计时清晰可见。", 13, MUTED, false, 9);
         captureStatus = addText(capture, "未运行", 13, INK, false, 14);
-        startButton = button(capture, "启动屏幕识别", true, 16, this::requestCapture);
-        stopButton = button(capture, "停止识别", false, 8, () -> {
-            if (CaptureService.isRunning) {
-                try {
-                    startService(new Intent(this, CaptureService.class).setAction(CaptureService.ACTION_STOP));
-                    showFeedback("已请求停止识别，已记录的提醒会保留。");
-                } catch (RuntimeException e) { showFeedback("停止失败，请稍后重试。"); }
-            }
+        startButton = button(capture, "启用无障碍服务", true, 16, this::requestMonitoring);
+        stopButton = button(capture, "停止监测", false, 8, () -> {
+            try {
+                FarmAccessibilityService.setMonitoring(this, false);
+                showFeedback("已请求停止监测，已记录的提醒会保留。");
+            } catch (RuntimeException e) { showFeedback("停止失败，请稍后重试。"); }
             refresh();
         });
         feedback = addText(capture, "", 13, GREEN, false, 10);
         feedback.setVisibility(View.GONE);
+        Button diagnosticsToggle = button(capture, "查看监测诊断 ▾", false, 12, () -> {});
+        diagnosticsText = addText(capture, "暂无诊断数据", 12, MUTED, false, 9);
+        diagnosticsText.setVisibility(View.GONE);
+        diagnosticsToggle.setOnClickListener(v -> {
+            boolean expanded = diagnosticsText.getVisibility() != View.VISIBLE;
+            diagnosticsText.setVisibility(expanded ? View.VISIBLE : View.GONE);
+            diagnosticsToggle.setText(expanded ? "收起监测诊断 ▴" : "查看监测诊断 ▾");
+        });
+        button(capture, "查看无障碍设置", false, 8,
+                () -> openSettings(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
 
         LinearLayout timing = card(page, 16, Color.WHITE);
         addText(timing, "提前多久提醒", 18, INK, true, 0);
-        addText(timing, "只用于之后新记录的提醒。识别中修改需停止后重新启动。", 13, MUTED, false, 7);
+        addText(timing, "只用于之后新记录的提醒，不会改变已记录的提醒时间。", 13, MUTED, false, 7);
         LinearLayout choices = new LinearLayout(this);
         timing.addView(choices, spaced(-1, -2, 13));
         int[] values = {0, 60, 300};
@@ -135,7 +142,7 @@ public class MainActivity extends Activity {
                 leadSeconds = value;
                 settings.edit().putInt("leadSeconds", value).apply();
                 updateLeadButtons();
-                if (CaptureService.isRunning) showFeedback("已保存；停止并重新启动识别后生效。");
+                if (FarmAccessibilityService.isRunning) showFeedback("已保存，将用于之后新记录的提醒。");
             });
         }
         updateLeadButtons();
@@ -170,34 +177,19 @@ public class MainActivity extends Activity {
         addText(page, "仅在本机处理画面，不上传数据。不会自动点击微信或操作游戏，不需要悬浮窗权限。", 12, MUTED, false, 12);
     }
 
-    private void requestCapture() {
-        if (capturePending || CaptureService.isRunning) return;
-        try {
-            MediaProjectionManager manager = (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
-            if (manager == null) { showFeedback("此设备无法请求屏幕录制授权。"); return; }
-            capturePending = true;
-            startActivityForResult(manager.createScreenCaptureIntent(), SCREEN_CAPTURE);
-        } catch (RuntimeException e) {
-            capturePending = false;
-            showFeedback("无法打开屏幕授权，请稍后重试。");
-        }
-        refresh();
-    }
-
-    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode != SCREEN_CAPTURE) return;
-        capturePending = false;
-        if (resultCode != RESULT_OK || data == null) {
-            showFeedback("已取消屏幕授权，未启动识别。你可以随时重试。");
-        } else if (!CaptureService.isRunning) {
+    private void requestMonitoring() {
+        if (Build.VERSION.SDK_INT < 30) {
+            showFeedback("此设备低于 Android 11，不支持所需的无障碍截图，无法开始监测。已有提醒仍可使用。");
+        } else if (!FarmAccessibilityService.isEnabled(this)) {
+            openSettings(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+        } else if (!FarmAccessibilityService.isConnected) {
+            showFeedback("设置中已启用服务，正在等待系统连接；尚未开始监测。可稍后返回检查，或查看无障碍设置。");
+        } else if (!FarmAccessibilityService.isRunning) {
             try {
-                startForegroundService(new Intent(this, CaptureService.class)
-                        .putExtra("resultCode", resultCode).putExtra("data", data)
-                        .putExtra("leadSeconds", leadSeconds));
-                showFeedback("已提交启动请求，请稍候并查看识别状态。");
+                FarmAccessibilityService.setMonitoring(this, true);
+                showFeedback("已提交开始请求，请查看下方状态；切换到微信后按窗口线索进行监测。");
             } catch (RuntimeException e) {
-                showFeedback("无法启动识别，请重新授权后重试。");
+                showFeedback("无法开始监测，请检查无障碍服务状态后重试。");
             }
         }
         refresh();
@@ -270,17 +262,26 @@ public class MainActivity extends Activity {
         super.onDestroy();
     }
 
-    @Override protected void onSaveInstanceState(Bundle state) {
-        state.putBoolean("capturePending", capturePending);
-        super.onSaveInstanceState(state);
-    }
-
     private void refresh() {
-        boolean running = CaptureService.isRunning;
-        runningLabel.setText(running ? "●  正在识别" : "○  识别未启动");
-        captureStatus.setText("识别状态：" + (CaptureService.lastStatus == null ? "未运行" : CaptureService.lastStatus));
-        startButton.setEnabled(!running && !capturePending);
-        startButton.setText(capturePending ? "等待屏幕授权…" : running ? "识别运行中" : "启动屏幕识别");
+        boolean supported = Build.VERSION.SDK_INT >= 30;
+        boolean enabled = FarmAccessibilityService.isEnabled(this);
+        boolean connected = FarmAccessibilityService.isConnected;
+        boolean running = FarmAccessibilityService.isRunning;
+        String readiness = !supported ? "需要 Android 11 及以上；此设备不支持无障碍截图，无法开始监测。"
+                : !enabled ? "无障碍服务未启用；可自行选择前往系统设置开启。"
+                : !connected ? "无障碍服务已启用，等待系统连接；当前无法开始监测。"
+                : "无障碍服务已连接";
+        runningLabel.setText(!supported ? "○  此设备不支持监测"
+                : !enabled || !connected ? "○  服务尚未就绪"
+                : running ? "●  监测已开启 · 离开微信暂停" : "○  监测未启动");
+        String status = FarmAccessibilityService.lastStatus;
+        captureStatus.setText(readiness + "\n监测状态：" + (blank(status) ? "未运行" : status));
+        String diagnostics = FarmAccessibilityService.diagnostics;
+        diagnosticsText.setText(blank(diagnostics) ? "暂无诊断数据。开始后可查看截图计数、OCR 处理与拒绝原因；不展示原图或完整识别文本。" : diagnostics);
+        startButton.setEnabled(supported && !running && (!enabled || connected));
+        startButton.setAlpha(startButton.isEnabled() ? 1f : 0.55f);
+        startButton.setText(!supported ? "此设备不支持监测" : !enabled ? "启用无障碍服务"
+                : !connected ? "等待服务连接…" : running ? "监测已开启" : "开始监测");
         stopButton.setVisibility(running ? View.VISIBLE : View.GONE);
         boolean notified = notificationsAllowed();
         notificationStatus.setText(notified ? "通知 · 已开启" : "通知 · 未开启");
@@ -308,7 +309,7 @@ public class MainActivity extends Activity {
         if (items.isEmpty()) {
             LinearLayout empty = card(reminders, 10, 0xFFEDEFE6);
             addText(empty, "还没有成熟提醒", 17, INK, true, 0);
-            addText(empty, "启动识别后，打开好友农场。确认好友和成熟倒计时后，记录会出现在这里。", 14, MUTED, false, 9);
+            addText(empty, "开始监测后，在微信打开好友农场。识别并确认好友和成熟倒计时后，记录会出现在这里。", 14, MUTED, false, 9);
             return;
         }
         SimpleDateFormat date = new SimpleDateFormat("yyyy年M月d日 HH:mm:ss", Locale.CHINA);
