@@ -16,6 +16,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.provider.Settings;
 import android.view.View;
 import android.view.WindowInsets;
@@ -40,6 +41,7 @@ public class MainActivity extends Activity {
     private final List<Button> leadButtons = new ArrayList<>();
     private TextView runningLabel, captureStatus, diagnosticsText, feedback, notificationStatus, exactStatus, listTitle;
     private TextView processedCount, pendingCount, ocrState, queueDetails;
+    private TextView foregroundStatus, foregroundError, monitorNotificationHint;
     private Button startButton, stopButton, notificationButton, exactButton, clearButton;
     private LinearLayout reminders;
     private SharedPreferences settings;
@@ -47,6 +49,9 @@ public class MainActivity extends Activity {
     private AlarmScheduler scheduler;
     private int leadSeconds;
     private boolean resumed;
+    private boolean foregroundStartupPending, foregroundRequestFailed;
+    private long foregroundStartupDeadline;
+    private String foregroundErrorBeforeStart = "";
     private String listSignature = "";
     private final Runnable ticker = new Runnable() {
         @Override public void run() {
@@ -103,6 +108,12 @@ public class MainActivity extends Activity {
         addText(capture, "可自行选择启用无障碍服务：用于读取前台窗口线索，并获取本地单张截图来识别倒计时。不自动点击、不上传、不保存截图。", 14, MUTED, false, 9);
         addText(capture, "启用服务后，仍需手动开始监测。离开微信暂停；小游戏窗口身份待验证，可能需要少量画面探测。请保持好友名和成熟倒计时清晰可见。", 13, MUTED, false, 9);
         captureStatus = addText(capture, "未运行", 13, INK, false, 14);
+        foregroundStatus = addText(capture, "前台监测服务 · 未启动", 13, GREEN, true, 8);
+        addText(capture, "监测时显示静默常驻通知，可降低被系统回收的概率，仍受系统管理。点击监测通知可返回本应用。", 12, MUTED, false, 7);
+        monitorNotificationHint = addText(capture, "通知栏中的监测状态和停止按钮可能不可见，可返回应用停止。", 12, MUTED, false, 7);
+        monitorNotificationHint.setVisibility(View.GONE);
+        foregroundError = addText(capture, "", 13, INK, false, 7);
+        foregroundError.setVisibility(View.GONE);
         LinearLayout progress = column();
         progress.setPadding(dp(14), dp(14), dp(14), dp(14));
         progress.setBackground(background(0xFFF7FAF3, 14, 0xFFD6E2D1));
@@ -116,7 +127,8 @@ public class MainActivity extends Activity {
         startButton = button(capture, "检查无障碍设置", true, 16, this::requestMonitoring);
         stopButton = button(capture, "停止监测", false, 8, () -> {
             try {
-                FarmAccessibilityService.setMonitoring(this, false);
+                MonitorForegroundService.requestStop(this);
+                foregroundStartupPending = false;
                 showFeedback("已请求停止监测，已记录的提醒会保留。");
             } catch (RuntimeException e) { showFeedback("停止失败，请稍后重试。"); }
             refresh();
@@ -189,6 +201,7 @@ public class MainActivity extends Activity {
     }
 
     private void requestMonitoring() {
+        if (foregroundStartupPending || MonitorForegroundService.isActive) return;
         if (Build.VERSION.SDK_INT < 30) {
             showFeedback("此设备低于 Android 11，不支持所需的无障碍截图，无法开始监测。已有提醒仍可使用。");
         } else if (!FarmAccessibilityService.isEnabled(this)) {
@@ -198,14 +211,16 @@ public class MainActivity extends Activity {
             showFeedback("等待系统连接无障碍服务；尚未开始监测。需服务已连接才能启动，可稍后返回检查，或查看系统无障碍设置。");
         } else if (!FarmAccessibilityService.isRunning) {
             try {
-                FarmAccessibilityService.setMonitoring(this, true);
-                if (FarmAccessibilityService.isConnected && FarmAccessibilityService.isRunning) {
-                    showFeedback("监测已开启；切换到微信后按窗口线索进行监测。");
-                } else {
-                    showFeedback("监测未能启动，需无障碍服务已连接；请等待系统恢复并检查系统无障碍设置后重试。");
-                }
+                foregroundErrorBeforeStart = MonitorForegroundService.lastError;
+                MonitorForegroundService.requestStart(this);
+                foregroundStartupPending = true;
+                foregroundRequestFailed = false;
+                foregroundStartupDeadline = SystemClock.uptimeMillis() + 5000;
+                showFeedback("已请求启动，等待监测状态更新。");
             } catch (RuntimeException e) {
-                showFeedback("无法开始监测，请检查无障碍服务状态后重试。");
+                foregroundStartupPending = false;
+                foregroundRequestFailed = true;
+                showFeedback("无法请求启动前台监测服务，请检查系统设置后重试。");
             }
         }
         refresh();
@@ -283,6 +298,29 @@ public class MainActivity extends Activity {
         boolean enabled = FarmAccessibilityService.isEnabled(this);
         boolean connected = FarmAccessibilityService.isConnected;
         boolean running = FarmAccessibilityService.isRunning;
+        boolean foregroundActive = MonitorForegroundService.isActive;
+        String serviceError = MonitorForegroundService.lastError;
+        boolean newServiceError = !blank(serviceError)
+                && !serviceError.equals(foregroundErrorBeforeStart);
+        if (foregroundStartupPending) {
+            if (foregroundActive) {
+                foregroundStartupPending = false;
+                showFeedback(running ? "监测已开启；切换到微信后按窗口线索进行监测。"
+                        : "前台监测服务已启动，等待监测状态更新。");
+            } else if (newServiceError) {
+                foregroundStartupPending = false;
+                showFeedback("前台监测未能启动，请检查无障碍服务连接及系统设置后重试。");
+            } else if (SystemClock.uptimeMillis() >= foregroundStartupDeadline) {
+                foregroundStartupPending = false;
+                showFeedback("启动状态尚未确认，请查看监测状态后重试。");
+            }
+        }
+        foregroundStatus.setText("前台监测服务 · " + (foregroundActive ? "运行中" : "未启动")
+                + (foregroundStartupPending ? " · 等待启动" : ""));
+        boolean hasForegroundError = !foregroundActive && !foregroundStartupPending
+                && (foregroundRequestFailed || !blank(serviceError));
+        foregroundError.setVisibility(hasForegroundError ? View.VISIBLE : View.GONE);
+        foregroundError.setText("前台监测启动或运行遇到问题，请检查无障碍服务连接及系统设置后重试。");
         String readiness = !supported ? "需要 Android 11 及以上；此设备不支持无障碍截图，无法开始监测。"
                 : !enabled ? (connected
                         ? "服务当前不可用，等待系统恢复；请检查系统无障碍设置。连接标记仍在，但当前查询无法确认服务可用，不代表已关闭授权。"
@@ -308,12 +346,16 @@ public class MainActivity extends Activity {
                 progress.maxPendingFrames, progress.dropped));
         String diagnostics = FarmAccessibilityService.diagnostics;
         diagnosticsText.setText(blank(diagnostics) ? "暂无诊断数据。开始后可查看截图计数、OCR 处理与拒绝原因；不展示原图或完整识别文本。" : diagnostics);
-        startButton.setEnabled(supported && !running && (!enabled || connected));
+        startButton.setEnabled(supported && !running && !foregroundActive
+                && !foregroundStartupPending && (!enabled || connected));
         startButton.setAlpha(startButton.isEnabled() ? 1f : 0.55f);
-        startButton.setText(!supported ? "此设备不支持监测" : !enabled ? "检查无障碍设置"
-                : !connected ? "等待服务连接…" : running ? "监测已开启" : "开始监测");
-        stopButton.setVisibility(running ? View.VISIBLE : View.GONE);
+        startButton.setText(!supported ? "此设备不支持监测"
+                : foregroundStartupPending ? "等待启动…" : !enabled ? "检查无障碍设置"
+                : !connected ? "等待服务连接…" : running ? "监测已开启"
+                : foregroundActive ? "前台监测服务运行中" : "开始监测");
+        stopButton.setVisibility(running || foregroundActive || foregroundStartupPending ? View.VISIBLE : View.GONE);
         boolean notified = notificationsAllowed();
+        monitorNotificationHint.setVisibility(notified ? View.GONE : View.VISIBLE);
         notificationStatus.setText(notified ? "通知 · 已开启" : "通知 · 未开启");
         notificationButton.setText(notified ? "查看通知设置" : "开启通知 / 前往设置");
         boolean exact = scheduler.canScheduleExact();
