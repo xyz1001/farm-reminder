@@ -42,7 +42,7 @@ public class MainActivity extends Activity {
     private TextView runningLabel, captureStatus, diagnosticsText, feedback, notificationStatus, exactStatus, listTitle;
     private TextView processedCount, pendingCount, ocrState, queueDetails;
     private TextView foregroundStatus, foregroundError, monitorNotificationHint;
-    private Button startButton, stopButton, notificationButton, exactButton, clearButton;
+    private Button startButton, stopButton, retryButton, notificationButton, exactButton, clearButton;
     private LinearLayout reminders;
     private SharedPreferences settings;
     private ReminderStore store;
@@ -73,6 +73,7 @@ public class MainActivity extends Activity {
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
                 | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
         buildScreen();
+        FarmAccessibilityService.refreshDiskProgress(this);
     }
 
     private void buildScreen() {
@@ -105,8 +106,8 @@ public class MainActivity extends Activity {
         LinearLayout capture = card(page, 24, 0xFFE9EFE5);
         runningLabel = addText(capture, "○  监测未启动", 13, GREEN, true, 0);
         addText(capture, "记录好友农场的成熟时间", 20, INK, true, 12);
-        addText(capture, "可自行选择启用无障碍服务：用于读取前台窗口线索，并获取本地单张截图来识别倒计时。不自动点击、不上传、不保存截图。", 14, MUTED, false, 9);
-        addText(capture, "启用服务后，仍需手动开始监测。离开微信暂停；小游戏窗口身份待验证，可能需要少量画面探测。请保持好友名和成熟倒计时清晰可见。", 13, MUTED, false, 9);
+        addText(capture, "可自行选择启用无障碍服务：读取前台窗口线索，通过本地截图识别倒计时。截图暂存应用私有目录，成功处理后删除，失败保留。不上传、不自动点击。", 14, MUTED, false, 9);
+        addText(capture, "启用服务后，仍需手动开始监测。离开微信停止截图，已保存图片可继续识别；手动停止则保留队列并暂停处理。小游戏窗口身份待验证，可能需要少量画面探测。", 13, MUTED, false, 9);
         captureStatus = addText(capture, "未运行", 13, INK, false, 14);
         foregroundStatus = addText(capture, "前台监测服务 · 未启动", 13, GREEN, true, 8);
         addText(capture, "监测时显示静默常驻通知，可降低被系统回收的概率，仍受系统管理。点击监测通知可返回本应用。", 12, MUTED, false, 7);
@@ -122,14 +123,24 @@ public class MainActivity extends Activity {
         processedCount = addText(progress, "已识别 0 张", 21, INK, true, 8);
         pendingCount = addText(progress, "待识别 0 张", 21, GREEN, true, 4);
         ocrState = addText(progress, "暂无正在识别的画面", 13, GREEN, false, 9);
-        addText(progress, "已识别指完成 OCR 处理，不代表已添加提醒。待识别仅计排队画面，不含正在识别的 1 张。", 12, MUTED, false, 8);
+        addText(progress, "已识别指完成 OCR 尝试，不代表已添加提醒。待识别仅计排队图片，不含正在识别的 1 张或失败保留图片。", 12, MUTED, false, 8);
         queueDetails = addText(progress, "", 12, MUTED, false, 8);
+        addText(progress, "队列无固定张数限制；空间不足时暂停新增截图，不淘汰待处理图片。重新打开应用只恢复统计，需手动开始监测才会继续处理。", 12, MUTED, false, 8);
+        retryButton = button(progress, "重试保存/失败图片", false, 10, () -> {
+            try {
+                FarmAccessibilityService.retryFailedFrames(this);
+                showFeedback(FarmAccessibilityService.isRunning
+                        ? "已请求重试失败图片，请等待统计更新。"
+                        : "已请求重试失败图片；尚未开始监测，需手动开始才会继续识别。");
+            } catch (RuntimeException e) { showFeedback("未能请求重试，请稍后再试。失败图片仍保留。"); }
+        });
+        retryButton.setVisibility(View.GONE);
         startButton = button(capture, "检查无障碍设置", true, 16, this::requestMonitoring);
         stopButton = button(capture, "停止监测", false, 8, () -> {
             try {
                 MonitorForegroundService.requestStop(this);
                 foregroundStartupPending = false;
-                showFeedback("已请求停止监测，已记录的提醒会保留。");
+                showFeedback("已请求停止监测：停止截图和队列处理，已保存图片与提醒均保留。");
             } catch (RuntimeException e) { showFeedback("停止失败，请稍后重试。"); }
             refresh();
         });
@@ -275,6 +286,7 @@ public class MainActivity extends Activity {
 
     @Override protected void onResume() {
         super.onResume();
+        FarmAccessibilityService.refreshDiskProgress(this);
         resumed = true;
         try { scheduler.rescheduleAll(); }
         catch (RuntimeException e) { showMessage("部分提醒未能重新安排，请检查权限。"); }
@@ -329,21 +341,27 @@ public class MainActivity extends Activity {
                 : "无障碍服务已连接";
         runningLabel.setText(!supported ? "○  此设备不支持监测"
                 : !enabled || !connected ? "○  服务尚未就绪"
-                : running ? "●  监测已开启 · 离开微信暂停" : "○  监测未启动");
+                : running ? "●  监测已开启 · 离开微信仅停截图" : "○  监测未启动 · 队列保留");
         String status = FarmAccessibilityService.lastStatus;
-        captureStatus.setText(readiness + "\n监测状态：" + (blank(status) ? "未运行" : status));
+        captureStatus.setText(readiness + "\n监测状态：" + monitorStatusText(status));
         OcrProgress progress = FarmAccessibilityService.getOcrProgress();
         processedCount.setText("已识别 " + progress.processed + " 张");
         pendingCount.setText("待识别 " + progress.queued + " 张");
-        ocrState.setText(progress.recognizing ? "正在识别 1 张 · 不计入待识别"
-                : !connected ? "服务未连接 · 暂无正在识别的画面"
-                : !running ? "监测未启动 · 暂无正在识别的画面"
-                : "暂无正在识别的画面");
+        ocrState.setText((progress.recognizing ? "正在识别 1 张 · 不计入待识别"
+                : !running ? "监测未启动 · 已保存队列保留，需手动开始"
+                : "暂无正在识别的图片") + "\n" + capturePauseText(progress, running, connected));
         queueDetails.setText(String.format(Locale.CHINA,
-                "队列内存 %.1f / %.1f MiB\n队列最多 %d 张 · 已丢弃 %d 张",
-                progress.pendingBytes / (1024f * 1024f),
-                progress.maxPendingBytes / (1024f * 1024f),
-                progress.maxPendingFrames, progress.dropped));
+                "失败保留 %d 张 · 待清理 %d 张\n磁盘占用 %.1f MiB%s",
+                progress.failedCount, progress.cleanupPendingCount,
+                progress.retainedBytes / (1024f * 1024f),
+                (progress.writing ? "\n正在保存截图 · 尚未确认可靠落盘，请勿清除应用数据" : "")
+                        + (progress.hasUnsavedCapture
+                        ? "\n有1张截图尚未保存，勿关闭应用，可重试保存"
+                        : progress.writing ? ""
+                        : "WRITE_FAILED".equals(progress.pauseReason)
+                        ? "\n可能存在未可靠保存的截图，请检查存储空间后重试" : "")));
+        retryButton.setVisibility(progress.retryAvailable ? View.VISIBLE : View.GONE);
+        retryButton.setEnabled(progress.retryAvailable);
         String diagnostics = FarmAccessibilityService.diagnostics;
         diagnosticsText.setText(blank(diagnostics) ? "暂无诊断数据。开始后可查看截图计数、OCR 处理与拒绝原因；不展示原图或完整识别文本。" : diagnostics);
         startButton.setEnabled(supported && !running && !foregroundActive
@@ -399,6 +417,34 @@ public class MainActivity extends Activity {
                         store.delete(r.id); refresh();
                     }).show());
         }
+    }
+
+    private String monitorStatusText(String status) {
+        if (blank(status)) return "未运行";
+        if ("已停止".equals(status)) return "监测已停止，已保存队列保留，需手动开始";
+        if ("STORAGE_FAILED".equals(status)) return "本地存储遇到问题，监测已停止；请检查存储空间后手动重试";
+        if ("OCR_TIMEOUT".equals(status)) return "图片识别超时，监测已停止；等待任务结束后手动开始";
+        if ("LOW_SPACE".equals(status)) return "存储空间不足，暂停新增截图";
+        if ("WRITE_FAILED".equals(status)) return "截图保存遇到问题，暂停新增截图";
+        if ("SERVICE_UNAVAILABLE".equals(status)) return "截图服务暂不可用，请检查服务连接";
+        if ("NOT_FOREGROUND".equals(status)) return "停止截图，已保存图片继续识别";
+        if (status.startsWith("处理完成:")) return "图片处理完成，不代表已添加提醒";
+        return status;
+    }
+
+    private String capturePauseText(OcrProgress progress, boolean running, boolean connected) {
+        if ("LOW_SPACE".equals(progress.pauseReason))
+            return "存储空间不足 · 暂停新增截图，已保存图片仍可处理";
+        if ("WRITE_FAILED".equals(progress.pauseReason))
+            return "截图保存遇到问题 · 暂停新增截图，请检查存储空间";
+        if ("SERVICE_UNAVAILABLE".equals(progress.pauseReason) || !connected)
+            return "截图服务尚未就绪 · 已保存图片保留";
+        if ("STOPPED".equals(progress.pauseReason) || !running)
+            return "监测已停止 · 不再截图，队列保留等待手动开始";
+        if ("NOT_FOREGROUND".equals(progress.pauseReason))
+            return "当前不满足截图条件 · 停止截图，已保存图片继续识别";
+        if (progress.capturePaused) return "新增截图已暂停 · 请查看监测状态，已保存图片保留";
+        return "按前台场景截图 · 已保存图片按序处理";
     }
 
     private void updateLeadButtons() {

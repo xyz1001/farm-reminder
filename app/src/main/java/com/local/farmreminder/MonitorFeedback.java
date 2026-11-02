@@ -17,11 +17,32 @@ public final class MonitorFeedback {
     private static Toast activeToast;
     private static Runnable pendingRecognition;
     private static Boolean insideFarm;
+    private static boolean processingActive;
+    // Written only on the main thread; dispatch may read it from a worker.
+    private static volatile long processingEpoch;
     private static long lastRecognizedAt = -REPEAT_WINDOW_MS;
     private static long lastAddedAt = -REPEAT_WINDOW_MS;
     private static long lastFailedAt = -REPEAT_WINDOW_MS;
 
     private MonitorFeedback() { }
+
+    public static void setSessionActive(Context context, boolean active) {
+        Runnable update = () -> {
+            processingEpoch++;
+            processingActive = active;
+            cancelRecognition();
+            insideFarm = null;
+            lastRecognizedAt = -REPEAT_WINDOW_MS;
+            lastAddedAt = -REPEAT_WINDOW_MS;
+            lastFailedAt = -REPEAT_WINDOW_MS;
+            if (!active && activeToast != null) {
+                activeToast.cancel();
+                activeToast = null;
+            }
+        };
+        if (Looper.myLooper() == Looper.getMainLooper()) update.run();
+        else MAIN.post(update);
+    }
 
     public static void entered(Context context) {
         dispatch(context, Event.ENTERED);
@@ -46,10 +67,13 @@ public final class MonitorFeedback {
     private static void dispatch(Context context, Event event) {
         // Never retain an Activity or Service, including in queued callbacks.
         Context app = context.getApplicationContext();
-        MAIN.post(() -> handle(app, event));
+        long epoch = processingEpoch;
+        if (Looper.myLooper() == Looper.getMainLooper()) handle(app, event, epoch);
+        else MAIN.post(() -> handle(app, event, epoch));
     }
 
-    private static void handle(Context app, Event event) {
+    private static void handle(Context app, Event event, long epoch) {
+        if (!processingActive || epoch != processingEpoch) return;
         long now = SystemClock.elapsedRealtime();
         switch (event) {
             case ENTERED:
@@ -62,21 +86,20 @@ public final class MonitorFeedback {
                 lastAddedAt = -REPEAT_WINDOW_MS;
                 lastFailedAt = -REPEAT_WINDOW_MS;
                 // Boundaries are immediate, never throttled by recognition feedback.
-                show(app, entered ? "已进入农场，开始识别" : "已离开农场，暂停识别");
+                show(app, entered ? "已进入农场，开始识别" : "离开农场，停止截图；队列继续识别");
                 break;
             case RECOGNIZED:
-                if (Boolean.FALSE.equals(insideFarm)
-                        || now - lastRecognizedAt < REPEAT_WINDOW_MS) return;
+                if (now - lastRecognizedAt < REPEAT_WINDOW_MS) return;
                 lastRecognizedAt = now;
                 cancelRecognition();
                 pendingRecognition = () -> {
                     pendingRecognition = null;
+                    if (!processingActive || epoch != processingEpoch) return;
                     show(app, "已识别成熟时间");
                 };
                 MAIN.postDelayed(pendingRecognition, MERGE_DELAY_MS);
                 break;
             case ADDED:
-                if (Boolean.FALSE.equals(insideFarm)) return;
                 cancelRecognition();
                 // Also merge if the two notifications arrive in the opposite order.
                 lastRecognizedAt = now;

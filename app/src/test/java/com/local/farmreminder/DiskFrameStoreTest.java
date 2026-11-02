@@ -1,0 +1,307 @@
+package com.local.farmreminder;
+
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.security.MessageDigest;
+import java.util.UUID;
+
+import static org.junit.Assert.*;
+
+public class DiskFrameStoreTest {
+    @Rule public TemporaryFolder temporary = new TemporaryFolder();
+    private static final DiskFrameStore.DirectorySync NOOP_SYNC = dir -> { };
+    private static final String SESSION = UUID.randomUUID().toString();
+
+    private DiskFrameStore open(File root) throws IOException {
+        return new DiskFrameStore(root, NOOP_SYNC, DiskFrameStore.DEFAULT_OPS);
+    }
+    private DiskFrameStore.Frame frame(long sequence) {
+        DiskFrameStore.Frame f = new DiskFrameStore.Frame();
+        f.sessionId = SESSION; f.captureSequence = sequence; f.captureWallMs = 1700000000000L + sequence;
+        f.captureUptimeMs = 1000 + sequence; f.windowId = 4; f.captureMethod = "window";
+        f.width = 100; f.height = 200;
+        return f;
+    }
+    private DiskFrameStore.Frame publish(DiskFrameStore store, int n) throws IOException {
+        return store.publish(frame(n), out -> { out.write(("image" + n).getBytes(StandardCharsets.UTF_8)); return true; });
+    }
+
+    @Test public void fifoSurvivesReopenAndMoreThanFortyFrames() throws Exception {
+        File root = temporary.newFolder(); DiskFrameStore store = open(root);
+        for (int i = 1; i <= 45; i++) publish(store, i);
+        store = open(root); store.recover();
+        assertEquals(45, store.scan().pending);
+        for (int i = 1; i <= 45; i++) {
+            DiskFrameStore.Frame f = store.claimNext(); assertNotNull(f); assertEquals(i, f.captureSequence);
+            store.acknowledge(f); assertTrue(store.cleanup(f));
+        }
+        DiskFrameStore.Frame next = publish(open(root), 46);
+        assertEquals(46, next.enqueueSequence);
+    }
+
+    @Test public void interruptedProcessingNeedsExplicitRetry() throws Exception {
+        File root = temporary.newFolder(); DiskFrameStore store = open(root);
+        publish(store, 1); store.claimNext();
+        store = open(root); store.recover();
+        assertNull(store.claimNext());
+        DiskFrameStore.Frame failed = store.scan().frames.get(0);
+        assertEquals(DiskFrameStore.State.FAILED, failed.state);
+        assertEquals("INTERRUPTED_PROCESS", failed.failureCode);
+        store.retryFailed(); assertNotNull(store.claimNext());
+    }
+
+    @Test public void returnedClaimKeepsFrameAndOrder() throws Exception {
+        File root = temporary.newFolder(); DiskFrameStore store = open(root);
+        publish(store, 1); publish(store, 2);
+        DiskFrameStore.Frame first = store.claimNext(); store.returnPending(first);
+        assertEquals(1, open(root).claimNext().captureSequence);
+        assertEquals(2, store.scan().frames.size());
+    }
+
+    @Test public void encodingFailureLeavesStagingAndExistingFrames() throws Exception {
+        File root = temporary.newFolder(); DiskFrameStore store = open(root); publish(store, 1);
+        try { store.publish(frame(2), out -> { out.write(1); throw new IOException("disk full"); }); fail(); }
+        catch (IOException expected) { }
+        DiskFrameStore reopened = open(root); reopened.recover();
+        assertEquals(1, reopened.scan().pending);
+        assertTrue(reopened.scan().failedArtifacts >= 1);
+        assertEquals(1, reopened.claimNext().captureSequence);
+    }
+
+    @Test public void failedFramesAreNeverClaimedWithoutRetry() throws Exception {
+        DiskFrameStore store = open(temporary.newFolder()); publish(store, 1);
+        DiskFrameStore.Frame f = store.claimNext(); store.fail(f, "OCR_FAILED");
+        assertNull(store.claimNext()); assertTrue(store.image(f).isFile());
+        store.retryFailed(); assertEquals(f.id, store.claimNext().id);
+    }
+
+    @Test public void completedCleanupFailureNeverReclaimsFrame() throws Exception {
+        File root = temporary.newFolder();
+        DiskFrameStore.FileOps ops = new DiskFrameStore.FileOps() {
+            @Override public void move(File source, File target) throws IOException { DiskFrameStore.DEFAULT_OPS.move(source, target); }
+            @Override public void replace(File source, File target) throws IOException { DiskFrameStore.DEFAULT_OPS.replace(source, target); }
+            @Override public boolean delete(File file) { return false; }
+        };
+        DiskFrameStore store = new DiskFrameStore(root, NOOP_SYNC, ops);
+        publish(store, 1); DiskFrameStore.Frame f = store.claimNext(); store.acknowledge(f);
+        assertFalse(store.cleanup(f)); assertEquals(1, store.scan().cleanupPending);
+        assertNull(open(root).claimNext());
+    }
+
+    @Test public void failedManifestUpdateDoesNotAcknowledge() throws Exception {
+        File root = temporary.newFolder(); DiskFrameStore first = open(root);
+        publish(first, 1); DiskFrameStore.Frame f = first.claimNext();
+        DiskFrameStore.FileOps ops = new DiskFrameStore.FileOps() {
+            @Override public void move(File source, File target) throws IOException { DiskFrameStore.DEFAULT_OPS.move(source, target); }
+            @Override public void replace(File source, File target) throws IOException { throw new IOException("injected failure"); }
+            @Override public boolean delete(File file) { return DiskFrameStore.DEFAULT_OPS.delete(file); }
+        };
+        DiskFrameStore failing = new DiskFrameStore(root, NOOP_SYNC, ops);
+        try { failing.acknowledge(f); fail(); } catch (IOException expected) { }
+        assertTrue(first.image(f).isFile());
+        assertEquals(DiskFrameStore.State.PROCESSING, open(root).scan().frames.get(0).state);
+    }
+
+    @Test public void failedFinalDirectoryDeleteRemainsCleanupNotOcr() throws Exception {
+        File root = temporary.newFolder();
+        DiskFrameStore.FileOps ops = new DiskFrameStore.FileOps() {
+            @Override public void move(File source, File target) throws IOException { DiskFrameStore.DEFAULT_OPS.move(source, target); }
+            @Override public void replace(File source, File target) throws IOException { DiskFrameStore.DEFAULT_OPS.replace(source, target); }
+            @Override public boolean delete(File file) { return file.isDirectory() ? false : DiskFrameStore.DEFAULT_OPS.delete(file); }
+        };
+        DiskFrameStore store = new DiskFrameStore(root, NOOP_SYNC, ops);
+        publish(store, 1); DiskFrameStore.Frame f = store.claimNext(); store.acknowledge(f);
+        assertFalse(store.cleanup(f));
+        DiskFrameStore reopened = open(root);
+        assertEquals(1, reopened.scan().cleanupPending);
+        assertEquals(0, reopened.scan().failedArtifacts);
+        assertNull(reopened.claimNext());
+        reopened.cleanupTombstones();
+        assertEquals(0, reopened.scan().cleanupPending);
+    }
+
+    @Test public void failedRecoveryIsVisibleAndCanBeRetried() throws Exception {
+        File root = temporary.newFolder(); DiskFrameStore first = open(root);
+        publish(first, 1); first.claimNext();
+        final boolean[] failReplace = {true};
+        DiskFrameStore.FileOps ops = new DiskFrameStore.FileOps() {
+            @Override public void move(File source, File target) throws IOException { DiskFrameStore.DEFAULT_OPS.move(source, target); }
+            @Override public void replace(File source, File target) throws IOException {
+                if (failReplace[0]) throw new IOException("injected");
+                DiskFrameStore.DEFAULT_OPS.replace(source, target);
+            }
+            @Override public boolean delete(File file) { return DiskFrameStore.DEFAULT_OPS.delete(file); }
+        };
+        DiskFrameStore reopened = new DiskFrameStore(root, NOOP_SYNC, ops);
+        try { reopened.recover(); fail(); } catch (IOException expected) { }
+        assertEquals(1, reopened.scan().failedArtifacts);
+        failReplace[0] = false; reopened.recover();
+        assertEquals(0, reopened.scan().failedArtifacts);
+        reopened.retryFailed(); assertNotNull(reopened.claimNext());
+    }
+
+    @Test public void renamedImageRecoversWithSameIdAfterManifestFailure() throws Exception {
+        File root = temporary.newFolder();
+        DiskFrameStore.FileOps ops = new DiskFrameStore.FileOps() {
+            @Override public void move(File source, File target) throws IOException {
+                if (target.getName().equals("manifest.properties")) throw new IOException("injected");
+                DiskFrameStore.DEFAULT_OPS.move(source, target);
+            }
+            @Override public void replace(File source, File target) throws IOException { DiskFrameStore.DEFAULT_OPS.replace(source, target); }
+            @Override public boolean delete(File file) { return DiskFrameStore.DEFAULT_OPS.delete(file); }
+        };
+        DiskFrameStore.Frame original = frame(1);
+        try { new DiskFrameStore(root, NOOP_SYNC, ops).publish(original, out -> { out.write(42); return true; }); fail(); }
+        catch (IOException expected) { }
+        String id = original.id; original = null;
+        DiskFrameStore reopened = open(root); reopened.recover();
+        DiskFrameStore.Frame claim = reopened.claimNext(); assertNotNull(claim); assertEquals(id, claim.id);
+        reopened.acknowledge(claim); assertNull(reopened.claimNext());
+    }
+
+    @Test public void snapshotsDoNotHashImagesAndClaimsHashOnlySelectedFrames() throws Exception {
+        File root = temporary.newFolder(); final int[] reads = {0};
+        DiskFrameStore store = new DiskFrameStore(root, NOOP_SYNC, DiskFrameStore.DEFAULT_OPS, image -> {
+            reads[0]++;
+            byte[] hash;
+            try { hash = MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(image.toPath())); }
+            catch (java.security.NoSuchAlgorithmException e) { throw new AssertionError(e); }
+            StringBuilder value = new StringBuilder();
+            for (byte b : hash) value.append(String.format("%02x", b & 255));
+            return value.toString();
+        });
+        for (int i = 1; i <= 12; i++) publish(store, i);
+        store.scan(); store.scan(); assertEquals(0, reads[0]);
+        for (int i = 1; i <= 12; i++) {
+            DiskFrameStore.Frame f = store.claimNext(); assertNotNull(f);
+            store.acknowledge(f);
+        }
+        assertNull(store.claimNext()); assertEquals(12, reads[0]);
+    }
+
+    @Test public void digestMismatchFailsFrameAndContinuesToNext() throws Exception {
+        File root = temporary.newFolder(); DiskFrameStore store = open(root);
+        DiskFrameStore.Frame first = publish(store, 1); publish(store, 2);
+        Files.write(store.image(first).toPath(), "broken".getBytes(StandardCharsets.UTF_8));
+        assertEquals(2, store.claimNext().captureSequence);
+        assertEquals(DiskFrameStore.State.FAILED, store.scan().frames.get(0).state);
+    }
+
+    @Test public void uncertainContextPersistsAcrossReopen() throws Exception {
+        File root = temporary.newFolder(); DiskFrameStore store = open(root);
+        DiskFrameStore.Frame f = frame(1); f.contextCertain = false;
+        store.publish(f, out -> { out.write(1); return true; });
+        DiskFrameStore.Frame claim = open(root).claimNext();
+        assertNotNull(claim); assertFalse(claim.contextCertain);
+    }
+
+    @Test public void engineReconcilesTwoManifestFailuresWithoutForkingFrames() throws Exception {
+        File root = temporary.newFolder(); final int[] failures = {2};
+        DiskFrameStore.FileOps ops = new DiskFrameStore.FileOps() {
+            @Override public void move(File source, File target) throws IOException {
+                if (target.getName().equals("manifest.properties") && failures[0]-- > 0)
+                    throw new IOException("injected manifest failure");
+                DiskFrameStore.DEFAULT_OPS.move(source, target);
+            }
+            @Override public void replace(File source, File target) throws IOException { DiskFrameStore.DEFAULT_OPS.replace(source, target); }
+            @Override public boolean delete(File file) { return DiskFrameStore.DEFAULT_OPS.delete(file); }
+        };
+        DiskFrameStore store = new DiskFrameStore(root, NOOP_SYNC, ops);
+        DiskFrameStore.Frame[] frames = {frame(1), frame(2)};
+        String[] ids = new String[2]; long[] sequences = new long[2];
+        for (int i = 0; i < frames.length; i++) {
+            try { store.publish(frames[i], out -> { out.write(42); return true; }); fail(); }
+            catch (IOException expected) { }
+            ids[i] = frames[i].id; sequences[i] = frames[i].enqueueSequence;
+        }
+        for (int i = 0; i < frames.length; i++) {
+            if (!store.reconcilePublication(frames[i]))
+                store.publish(frames[i], out -> { out.write(42); return true; });
+            assertEquals(ids[i], frames[i].id); assertEquals(sequences[i], frames[i].enqueueSequence);
+        }
+        assertEquals(2, store.scan().pending);
+        for (int i = 0; i < frames.length; i++) {
+            DiskFrameStore.Frame claim = store.claimNext(); assertEquals(ids[i], claim.id);
+            store.acknowledge(claim); assertTrue(store.cleanup(claim));
+        }
+        DiskFrameStore reopened = open(root); reopened.recover();
+        assertEquals(0, reopened.scan().pending); assertEquals(0, reopened.scan().failedArtifacts);
+        assertTrue(reopened.scan().frames.isEmpty()); assertNull(reopened.claimNext());
+    }
+
+    @Test public void incompleteStageCannotForkOnReconcileOrPublish() throws Exception {
+        File root = temporary.newFolder(); DiskFrameStore store = open(root); DiskFrameStore.Frame f = frame(1);
+        try { store.publish(f, out -> { out.write(42); throw new IOException("injected"); }); fail(); }
+        catch (IOException expected) { }
+        String id = f.id; long sequence = f.enqueueSequence;
+        try { store.reconcilePublication(f); fail(); } catch (IOException expected) { }
+        try { store.publish(f, out -> { out.write(42); return true; }); fail(); } catch (IOException expected) { }
+        assertEquals(id, f.id); assertEquals(sequence, f.enqueueSequence);
+        assertTrue(new File(root, id + ".staging/image.tmp").isFile());
+        assertEquals(1, store.scan().failedArtifacts); assertEquals(0, store.scan().pending);
+    }
+
+    @Test public void noFrameArtifactAllowsNewPublicationWithSameCaptureMetadata() throws Exception {
+        File root = temporary.newFolder(); final boolean[] failSequence = {true};
+        DiskFrameStore.FileOps ops = new DiskFrameStore.FileOps() {
+            @Override public void move(File source, File target) throws IOException { DiskFrameStore.DEFAULT_OPS.move(source, target); }
+            @Override public void replace(File source, File target) throws IOException {
+                if (failSequence[0]) { failSequence[0] = false; throw new IOException("injected"); }
+                DiskFrameStore.DEFAULT_OPS.replace(source, target);
+            }
+            @Override public boolean delete(File file) { return DiskFrameStore.DEFAULT_OPS.delete(file); }
+        };
+        DiskFrameStore store = new DiskFrameStore(root, NOOP_SYNC, ops); DiskFrameStore.Frame f = frame(7);
+        try { store.publish(f, out -> { out.write(1); return true; }); fail(); } catch (IOException expected) { }
+        assertFalse(store.reconcilePublication(f));
+        store.publish(f, out -> { out.write(1); return true; });
+        DiskFrameStore.Frame claim = store.claimNext(); assertNotNull(claim);
+        assertEquals(7, claim.captureSequence); assertEquals(2, claim.enqueueSequence);
+        assertEquals(SESSION, claim.sessionId); assertEquals(f.captureWallMs, claim.captureWallMs);
+    }
+
+    @Test public void completedFrameCannotBeRepublished() throws Exception {
+        File root = temporary.newFolder(); DiskFrameStore store = open(root);
+        DiskFrameStore.Frame f = publish(store, 1); DiskFrameStore.Frame claim = store.claimNext();
+        store.acknowledge(claim);
+        store.publish(f, out -> { fail("must not rewrite completed frame"); return false; });
+        assertEquals(DiskFrameStore.State.COMPLETED, f.state); assertEquals(0, store.scan().pending);
+    }
+
+    @Test public void invalidStageIsPreservedAndCannotFork() throws Exception {
+        File root = temporary.newFolder(); DiskFrameStore store = open(root); DiskFrameStore.Frame f = frame(1);
+        try { store.publish(f, out -> { out.write(1); throw new IOException("injected"); }); fail(); }
+        catch (IOException expected) { }
+        File initial = new File(root, f.id + ".staging/initial.properties");
+        Files.write(initial.toPath(), "schemaVersion=unknown\n".getBytes(StandardCharsets.UTF_8));
+        String id = f.id;
+        try { store.reconcilePublication(f); fail(); } catch (IOException expected) { }
+        try { store.publish(f, out -> { out.write(1); return true; }); fail(); } catch (IOException expected) { }
+        assertEquals(id, f.id); assertTrue(initial.isFile()); assertEquals(1, store.scan().failedArtifacts);
+    }
+
+    @Test public void directPublishRetryAdoptsCompleteStage() throws Exception {
+        File root = temporary.newFolder(); final boolean[] failManifest = {true};
+        DiskFrameStore.FileOps ops = new DiskFrameStore.FileOps() {
+            @Override public void move(File source, File target) throws IOException {
+                if (target.getName().equals("manifest.properties") && failManifest[0]) {
+                    failManifest[0] = false; throw new IOException("injected");
+                }
+                DiskFrameStore.DEFAULT_OPS.move(source, target);
+            }
+            @Override public void replace(File source, File target) throws IOException { DiskFrameStore.DEFAULT_OPS.replace(source, target); }
+            @Override public boolean delete(File file) { return DiskFrameStore.DEFAULT_OPS.delete(file); }
+        };
+        DiskFrameStore store = new DiskFrameStore(root, NOOP_SYNC, ops); DiskFrameStore.Frame f = frame(1);
+        try { store.publish(f, out -> { out.write(1); return true; }); fail(); } catch (IOException expected) { }
+        String id = f.id; long sequence = f.enqueueSequence;
+        store.publish(f, out -> { fail("must adopt existing image"); return false; });
+        assertEquals(id, f.id); assertEquals(sequence, f.enqueueSequence); assertEquals(1, store.scan().pending);
+    }
+}

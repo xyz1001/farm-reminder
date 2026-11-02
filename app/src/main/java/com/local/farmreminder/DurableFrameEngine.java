@@ -1,0 +1,303 @@
+package com.local.farmreminder;
+
+import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Rect;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.StatFs;
+import android.system.ErrnoException;
+import android.system.Os;
+import android.system.OsConstants;
+
+import com.google.mlkit.vision.common.InputImage;
+import com.google.mlkit.vision.text.Text;
+import com.google.mlkit.vision.text.TextRecognition;
+import com.google.mlkit.vision.text.TextRecognizer;
+import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions;
+import com.google.android.gms.tasks.Task;
+
+import java.io.File;
+import java.io.FileDescriptor;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+/** Process-wide durable capture and OCR pipeline. All repository operations run on disk. */
+public final class DurableFrameEngine {
+    public interface Listener {
+        void onProgress(OcrProgress progress);
+        void onFrameResult(DiskFrameStore.Frame frame, List<OcrLine> lines, ReminderStore.FrameOutcome outcome, long processingEpoch);
+        void onStatus(String status);
+        void onFatal(String status);
+        void onFrameFailure(String anonymousCode, long processingEpoch);
+    }
+    private static final long RESERVE = 128L * 1024 * 1024, TIMEOUT_MS = 12000;
+    private static DurableFrameEngine instance;
+    public static synchronized DurableFrameEngine get(Context context) {
+        if (instance == null) instance = new DurableFrameEngine(context.getApplicationContext());
+        return instance;
+    }
+    private final Context context;
+    private final File root;
+    private final ExecutorService disk = Executors.newSingleThreadExecutor();
+    private final DurableFramePump pump = new DurableFramePump(disk);
+    private final Handler main = new Handler(Looper.getMainLooper());
+    private final DurableFrameFence fence = new DurableFrameFence();
+    private final Object captureLock = new Object();
+    private final Object listenerLock = new Object();
+    private volatile Listener listener;
+    private volatile long listenerEpoch = -1;
+    private volatile OcrProgress progress = new OcrProgress(0, 0, 0, 0, false, 0, 0, 0, false, "STOPPED");
+    private volatile boolean lowSpace, writeFailed, writing, storageFailed = true;
+    private Bitmap unsaved;
+    private DiskFrameStore.Frame unsavedMetadata;
+    private DiskFrameStore store;
+    private TextRecognizer recognizer;
+    private long processed, captured;
+    private DiskFrameStore.Snapshot snapshot = new DiskFrameStore.Snapshot();
+
+    private DurableFrameEngine(Context context) {
+        this.context = context;
+        root = new File(context.getNoBackupFilesDir(), "frames-v1");
+        disk.execute(() -> {
+            recoverStore();
+        });
+    }
+    private static void syncDirectory(File directory) throws IOException {
+        FileDescriptor fd = null;
+        try {
+            if (!directory.isDirectory()) throw new IOException("directory sync target is not a directory");
+            fd = Os.open(directory.getAbsolutePath(), OsConstants.O_RDONLY, 0);
+            Os.fsync(fd);
+        }
+        catch (ErrnoException e) { throw new IOException("directory sync failed", e); }
+        finally { if (fd != null) try { Os.close(fd); } catch (ErrnoException ignored) { } }
+    }
+    public void refresh() { disk.execute(() -> { try { scan(); } catch (Exception e) { storageFailed = true; update(); } }); }
+    public boolean start(Listener listener) {
+        if (Looper.myLooper() != Looper.getMainLooper()) throw new IllegalStateException("start must run on main thread");
+        final long token;
+        synchronized (listenerLock) {
+            token = fence.start();
+            if (token < 0) return false;
+            this.listener = listener; listenerEpoch = token;
+        }
+        disk.execute(() -> {
+            update();
+            if (storageFailed && !recoverStore()) { fatal(token, "STORAGE_FAILED"); return; }
+            if (!fence.valid(token)) return;
+            try { new AlarmScheduler(context).rescheduleAll(); } catch (RuntimeException ignored) { }
+            schedulePump();
+        });
+        return true;
+    }
+    public void stop() {
+        synchronized (listenerLock) { fence.stop(); }
+        disk.execute(this::update);
+    }
+    public void detach(Listener expected, long expectedEpoch) {
+        synchronized (listenerLock) {
+            if (listener != expected || listenerEpoch != expectedEpoch) return;
+            if (fence.valid(expectedEpoch)) fence.stop();
+            listener = null; listenerEpoch = -1;
+        }
+        disk.execute(this::update);
+    }
+    public boolean isRunning() { return fence.running(); }
+    public boolean canCapture() { synchronized (captureLock) { return fence.running() && !lowSpace && !storageFailed && unsaved == null; } }
+    public String capturePauseReason() {
+        if (!fence.running()) return "STOPPED";
+        if (storageFailed || writeFailed) return "WRITE_FAILED";
+        if (lowSpace) return "LOW_SPACE";
+        synchronized (captureLock) { return unsaved != null ? "WRITE_FAILED" : "NONE"; }
+    }
+    public long epoch() { return fence.epoch(); }
+    public OcrProgress progress() { return progress; }
+
+    /** Caller must only submit when canCapture() is true. Ownership transfers on acceptance. */
+    public void accept(Bitmap image, DiskFrameStore.Frame metadata) {
+        if (image == null || metadata == null) throw new IllegalArgumentException("missing capture");
+        synchronized (captureLock) {
+            if (unsaved != null) throw new IllegalStateException("capture slot occupied; ownership not transferred");
+            unsaved = image; unsavedMetadata = copyMetadata(metadata); writing = true;
+        }
+        disk.execute(() -> { update(); writeCapture(); });
+    }
+    private static DiskFrameStore.Frame copyMetadata(DiskFrameStore.Frame f) {
+        DiskFrameStore.Frame c = new DiskFrameStore.Frame();
+        c.sessionId = f.sessionId; c.captureMethod = f.captureMethod; c.captureSequence = f.captureSequence;
+        c.captureWallMs = f.captureWallMs; c.captureUptimeMs = f.captureUptimeMs; c.windowId = f.windowId;
+        c.width = f.width; c.height = f.height; c.contextCertain = f.contextCertain; return c;
+    }
+    private void writeCapture() {
+        Bitmap bitmap; DiskFrameStore.Frame frame;
+        synchronized (captureLock) { bitmap = unsaved; frame = unsavedMetadata; }
+        if (bitmap == null) return;
+        try {
+            if (store == null) throw new IOException("store unavailable");
+            if (!store.reconcilePublication(frame)) store.publish(frame, out -> bitmap.compress(Bitmap.CompressFormat.PNG, 100, out));
+            synchronized (captureLock) { unsaved = null; unsavedMetadata = null; writing = false; writeFailed = false; }
+            bitmap.recycle(); captured++;
+        } catch (Exception e) { writing = false; writeFailed = true; }
+        try { scan(); } catch (Exception e) { storageFailed = true; update(); }
+        schedulePump();
+    }
+    public void retryFailed() {
+        disk.execute(() -> {
+            try {
+                if (!fence.canRecover()) { status("RETRY_BUSY"); return; }
+                if (storageFailed && !recoverStore()) { status("STORAGE_FAILED"); return; }
+                if (store == null) throw new IOException("store unavailable");
+                store.retryFailed();
+                synchronized (captureLock) { writing = unsaved != null; }
+                if (writing) { update(); writeCapture(); } else scan();
+                if (fence.running()) schedulePump();
+            } catch (Exception e) { storageFailed = true; update(); }
+        });
+    }
+    /** Explicit recovery only; never run recover() over a live claim. */
+    private boolean recoverStore() {
+        boolean recovered = DurableFrameRecovery.attempt(fence, () -> {
+            DiskFrameStore candidate = new DiskFrameStore(root, DurableFrameEngine::syncDirectory, DiskFrameStore.DEFAULT_OPS);
+            candidate.recover();
+            DiskFrameStore.Snapshot checked = candidate.scan();
+            store = candidate; snapshot = checked;
+            try { lowSpace = new StatFs(root.getAbsolutePath()).getAvailableBytes() < RESERVE; }
+            catch (RuntimeException e) { lowSpace = true; }
+        });
+        storageFailed = !recovered;
+        update(); return recovered;
+    }
+    private void status(String value) { main.post(() -> { Listener l = listener; if (l != null) l.onStatus(value); }); }
+    private void scan() throws IOException {
+        snapshot = store.scan();
+        try { lowSpace = new StatFs(root.getAbsolutePath()).getAvailableBytes() < RESERVE; }
+        catch (RuntimeException e) { lowSpace = true; }
+        update();
+    }
+    private void update() {
+        int failed = snapshot.failedArtifacts;
+        for (DiskFrameStore.Frame f : snapshot.frames) if (f.state == DiskFrameStore.State.FAILED) failed++;
+        boolean hasUnsavedCapture, captureWriting;
+        synchronized (captureLock) { hasUnsavedCapture = unsaved != null; captureWriting = writing; }
+        OcrProgress p = new OcrProgress(processed, captured, snapshot.pending, snapshot.pendingBytes,
+                fence.modelActive(), failed, snapshot.cleanupPending, snapshot.retainedBytes, captureWriting, capturePauseReason(),
+                hasUnsavedCapture);
+        progress = p;
+        Listener expected = listener;
+        main.post(() -> { if (expected != null && expected == listener && progress == p) expected.onProgress(p); });
+    }
+    /** Disk-confined, coalesced pump: no recursive failure chain. */
+    private void schedulePump() {
+        pump.request(() -> drain(fence.epoch()));
+    }
+    private void drain(long token) {
+        if (store == null || storageFailed || !fence.beginFrame(token)) return;
+        DiskFrameStore.Frame frame;
+        try {
+            for (DiskFrameStore.Frame f : snapshot.frames) if (f.state == DiskFrameStore.State.COMPLETED) {
+                try { new ReminderStore(context).forgetFrameReceipt(f.id); store.cleanup(f); } catch (Exception ignored) { }
+            }
+            try { store.cleanupTombstones(); } catch (Exception ignored) { }
+            if (!fence.valid(token)) { finishFrame(); return; }
+            frame = store.claimNext();
+            if (frame == null) { finishFrame(); return; }
+            if (!fence.valid(token)) { returnPending(frame); finishFrame(); return; }
+            if (!frame.contextCertain) { fail(frame, "CONTEXT_UNCERTAIN", token, false); finishFrame(); return; }
+        } catch (Exception e) { storageError(token); finishFrame(); return; }
+        final Bitmap bitmap = decode(store.image(frame));
+        if (bitmap == null) { fail(frame, "DECODE_FAILED", token, false); finishFrame(); return; }
+        if (!fence.beginModel(token)) { bitmap.recycle(); returnPending(frame); finishFrame(); return; }
+        Runnable watchdog = () -> {
+            if (fence.timeout(token)) {
+                updateOnDisk();
+                Listener l = listener; if (l != null && listenerEpoch == token) l.onFatal("OCR_TIMEOUT");
+            }
+        };
+        final Task<Text> task;
+        try {
+            if (recognizer == null) recognizer = TextRecognition.getClient(new ChineseTextRecognizerOptions.Builder().build());
+            task = recognizer.process(InputImage.fromBitmap(bitmap, 0));
+        } catch (Exception e) {
+            fence.modelDone(); bitmap.recycle(); fail(frame, "OCR_FAILED", token, false); finishFrame(); return;
+        }
+        main.postDelayed(watchdog, TIMEOUT_MS);
+        // Direct executor marks native completion immediately, independent of disk backlog.
+        // The frame barrier remains held until the disk-side transition is finished.
+        task.addOnCompleteListener(Runnable::run, completed -> {
+            if (!fence.modelDone()) return;
+            main.removeCallbacks(watchdog);
+            bitmap.recycle();
+            disk.execute(() -> {
+                processed++;
+                try {
+                    if (!fence.valid(token)) returnPending(frame);
+                    else if (!completed.isSuccessful() || completed.getResult() == null) fail(frame, "OCR_FAILED", token, false);
+                    else processResult(frame, lines(completed.getResult()), token);
+                } catch (RuntimeException e) { fail(frame, "OCR_FAILED", token, false); }
+                finally { finishFrame(); }
+            });
+        });
+        update();
+    }
+    private static Bitmap decode(File file) {
+        try { return BitmapFactory.decodeFile(file.getAbsolutePath()); }
+        catch (RuntimeException e) { return null; }
+    }
+    private static List<OcrLine> lines(Text text) {
+        List<OcrLine> result = new ArrayList<>();
+        for (Text.TextBlock block : text.getTextBlocks()) for (Text.Line line : block.getLines()) {
+            Rect r = line.getBoundingBox(); if (r != null) result.add(new OcrLine(line.getText(), r.left, r.top, r.right, r.bottom));
+        }
+        return Collections.unmodifiableList(result);
+    }
+    private void processResult(DiskFrameStore.Frame frame, List<OcrLine> lines, long token) {
+        if (!fence.valid(token)) { returnPending(frame); return; }
+        ReminderStore reminders = new ReminderStore(context);
+        boolean admitted = false;
+        try {
+            String friend = OcrFrameParser.friend(lines, frame.width, frame.height);
+            Long countdown = OcrFrameParser.countdown(lines);
+            int lead = context.getSharedPreferences("settings", Context.MODE_PRIVATE).getInt("leadSeconds", 60);
+            admitted = fence.tryAdmitTransaction(token);
+            if (!admitted) { returnPending(frame); return; }
+            ReminderStore.FrameOutcome outcome = reminders.commitFrame(frame, friend, countdown, lead);
+            if (!outcome.committed) { fail(frame, "BUSINESS_FAILED", token, true); return; }
+            if (outcome.reminder != null) try { new AlarmScheduler(context).schedule(outcome.reminder); } catch (RuntimeException ignored) { }
+            store.acknowledge(frame);
+            reminders.forgetFrameReceipt(frame.id);
+            try { store.cleanup(frame); } catch (IOException ignored) { }
+            main.post(() -> { if (fence.valid(token)) { Listener l = listener; if (l != null) l.onFrameResult(frame, lines, outcome, token); } });
+        } catch (Exception e) {
+            if (frame.state == DiskFrameStore.State.PROCESSING) fail(frame, "STORAGE_FAILED", token, admitted);
+            else storageError(token);
+        } finally { if (admitted) fence.finishTransaction(); }
+    }
+    private void fail(DiskFrameStore.Frame frame, String code, long token, boolean admitted) {
+        try {
+            if (!admitted && !fence.valid(token)) { store.returnPending(frame); return; }
+            store.fail(frame, code);
+            main.post(() -> { if (fence.shouldNotifyFailure(token)) { Listener l = listener; if (l != null) l.onFrameFailure(code, token); } });
+        } catch (Exception e) { storageError(token); }
+    }
+    private void returnPending(DiskFrameStore.Frame frame) {
+        try { store.returnPending(frame); }
+        catch (Exception e) { storageError(fence.epoch()); }
+    }
+    private void finishFrame() {
+        try { scan(); } catch (Exception e) { storageError(fence.epoch()); }
+        fence.finishFrame();
+        update();
+        if (fence.running() && !storageFailed && snapshot.pending > 0) schedulePump();
+    }
+    private void storageError(long token) { storageFailed = true; update(); fatal(token, "STORAGE_FAILED"); }
+    private void fatal(long token, String status) {
+        main.post(() -> { if (fence.valid(token)) { fence.stop(); Listener l = listener; if (l != null) l.onFatal(status); updateOnDisk(); } });
+    }
+    private void updateOnDisk() { disk.execute(this::update); }
+}
