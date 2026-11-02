@@ -57,7 +57,13 @@ public class FarmAccessibilityService extends AccessibilityService {
     private final SamplingPolicy policy = new SamplingPolicy();
     private final RecognitionLogic logic = new RecognitionLogic();
     private TextRecognizer recognizer;
-    private boolean busy, foreground, farm, destroyed;
+    private static final FramePipeline<Bitmap> pipeline = new FramePipeline<>(Bitmap::recycle);
+    private boolean foreground, farm, destroyed, receiverRegistered, closeRecognizerWhenIdle;
+    private long nextCaptureAllowed, lastCaptureUptime = -1, captureInterval, lastProcessedRequest;
+    private static long ocrStartedUptime;
+    private static FarmAccessibilityService ocrOwner;
+    private static final String OCR_BLOCKED = "识别任务未结束，暂不可启动；等待完成或重启本提醒应用进程";
+    private static final String CAPTURE_BLOCKED = "截图任务未结束，暂不可启动；等待完成或重启本提醒应用进程";
     private int windowId = -1;
     private long farmSeen, screenshots, clicks, contents, ocr, ocrMs, paused, rejectedFriend,
             rejectedTime, candidates, added, duplicate, errors;
@@ -81,7 +87,13 @@ public class FarmAccessibilityService extends AccessibilityService {
                 + " destroyed=" + destroyed + " connected=" + (instance == this && isConnected)
                 + " running=" + (instance == this && isRunning) + " foreground=" + foreground
                 + " farm=" + farm + " windowId=" + windowId + " package=" + foregroundPackage
-                + " busy=" + busy + " screenshots=" + screenshots + " ocr=" + ocr
+                + " captureInFlight=" + pipeline.captureBusy() + " ocrInFlight=" + pipeline.ocrBusy()
+                + " captureTimeout=" + pipeline.captureTimedOut() + " ocrTimeout=" + pipeline.ocrTimedOut()
+                + " pendingCount=" + pipeline.pendingCount() + " pendingBytes=" + pipeline.pendingBytes()
+                + " maxQueueObserved=" + pipeline.maxQueueObserved + " dropFull=" + pipeline.dropFull
+                + " dropExpired=" + pipeline.dropExpired + " dropInvalidated=" + pipeline.dropInvalidated
+                + " captureInterval=" + captureInterval + " lastQueueWaitMs=" + pipeline.lastQueueWaitMs
+                + " screenshots=" + screenshots + " ocr=" + ocr
                 + " ocrMs=" + ocrMs + " ocrFailures=" + ocrFailures + " errors=" + errors
                 + " lastError=" + lastError + " rejectedFriend=" + rejectedFriend
                 + " rejectedTime=" + rejectedTime + " candidates=" + candidates
@@ -142,27 +154,59 @@ public class FarmAccessibilityService extends AccessibilityService {
         connectedSequence = ++lifecycleSequence; connectionCount++;
         connectedAt = SystemClock.elapsedRealtime();
         FarmAccessibilityService previous = instance;
+        handler.removeCallbacks(sample); policy.invalidate(); pipeline.clear(); logic.reset(); farm = false; foreground = false; windowId = -1;
         instance = this; isConnected = true; isRunning = false;
-        if (previous != null && previous != this) previous.snapshot();
+        if (previous != null && previous != this) { previous.retire(); previous.snapshot(); }
         getSharedPreferences("settings", MODE_PRIVATE).edit().putBoolean("monitoringEnabled", false).apply();
-        recognizer = TextRecognition.getClient(new ChineseTextRecognizerOptions.Builder().build());
+        closeRecognizerWhenIdle = false;
+        if (recognizer == null && !pipeline.ocrBusy()) recognizer = TextRecognition.getClient(new ChineseTextRecognizerOptions.Builder().build());
         IntentFilter filter = new IntentFilter();
         filter.addAction(Intent.ACTION_SCREEN_OFF); filter.addAction(Intent.ACTION_SCREEN_ON); filter.addAction(Intent.ACTION_USER_PRESENT);
-        if (Build.VERSION.SDK_INT >= 33) registerReceiver(screenReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
-        else registerReceiver(screenReceiver, filter);
-        lastStatus = "服务已连接，请手动启动监测";
+        if (!receiverRegistered) {
+            if (Build.VERSION.SDK_INT >= 33) registerReceiver(screenReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+            else registerReceiver(screenReceiver, filter);
+            receiverRegistered = true;
+        }
+        pipeline.updateTimeouts(SystemClock.uptimeMillis());
+        if (pipeline.ocrBusy()) armWatchdog(false, pipeline.ocrId(), pipeline.ocrStarted());
+        if (pipeline.captureBusy()) armWatchdog(true, pipeline.captureId(), pipeline.captureStarted());
+        lastStatus = pipeline.startAllowed() ? "服务已连接，请手动启动监测" : blockedStatus();
+        reason = lastStatus;
         snapshot(); diagLog("connected");
     }
 
     private void setRunning(boolean running) {
         if (!alive()) return;
+        pipeline.updateTimeouts(SystemClock.uptimeMillis());
+        running = running && pipeline.startAllowed();
         getSharedPreferences("settings", MODE_PRIVATE).edit().putBoolean("monitoringEnabled", running).apply();
-        handler.removeCallbacks(sample); policy.invalidate(); logic.reset(); farm = false; foreground = false; windowId = -1; foregroundPackage = "null";
+        handler.removeCallbacks(sample); policy.invalidate(); pipeline.clear(); logic.reset(); farm = false; foreground = false; windowId = -1; foregroundPackage = "null";
         isRunning = running;
-        lastStatus = running ? "等待微信前台" : "已停止";
-        reason = running ? "等待微信前台" : "已停止"; publish();
+        lastStatus = !pipeline.startAllowed() ? blockedStatus() : (running ? "等待微信前台" : "已停止");
+        reason = lastStatus; publish();
         diagLog(running ? "start" : "stop");
         if (running) { updateForeground(); schedule(); }
+    }
+
+    private static String blockedStatus() { return pipeline.ocrTimedOut() ? OCR_BLOCKED : CAPTURE_BLOCKED; }
+
+    private static void checkTimeouts() {
+        if (!pipeline.updateTimeouts(SystemClock.uptimeMillis())) return;
+        FarmAccessibilityService owner = instance;
+        if (owner != null && owner.alive()) owner.setRunning(false);
+    }
+
+    private static void recoveredAfterTimeout(boolean timedOut) {
+        FarmAccessibilityService owner = instance;
+        if (timedOut && pipeline.startAllowed() && owner != null && owner.alive() && !isRunning) {
+            lastStatus = "任务已结束，请手动启动监测"; owner.reason = lastStatus; owner.publish();
+        }
+    }
+
+    private void retire() {
+        handler.removeCallbacks(sample); policy.invalidate(); pipeline.clear(); logic.reset(); foreground = false; farm = false;
+        if (receiverRegistered) { try { unregisterReceiver(screenReceiver); } catch (IllegalArgumentException ignored) { } receiverRegistered = false; }
+        if (recognizer != null) { if (ocrOwner == this) closeRecognizerWhenIdle = true; else { recognizer.close(); recognizer = null; } }
     }
 
     @Override public void onAccessibilityEvent(AccessibilityEvent event) {
@@ -180,7 +224,7 @@ public class FarmAccessibilityService extends AccessibilityService {
 
     @Override public void onInterrupt() {
         if (!alive()) return;
-        setMonitoring(this, false); lastStatus = "服务中断，请重新启动";
+        setMonitoring(this, false); lastStatus = pipeline.startAllowed() ? "服务中断，请重新启动" : blockedStatus();
     }
 
     @Override public boolean onUnbind(Intent intent) {
@@ -189,7 +233,7 @@ public class FarmAccessibilityService extends AccessibilityService {
         if (alive()) {
             setRunning(false);
             isConnected = false; instance = null;
-            lastStatus = "服务断开，请重新启动监测";
+            lastStatus = pipeline.startAllowed() ? "服务断开，请重新启动监测" : blockedStatus();
         }
         snapshot(); diagLog("unbind");
         return super.onUnbind(intent);
@@ -222,7 +266,7 @@ public class FarmAccessibilityService extends AccessibilityService {
         catch (RuntimeException e) { current = -1; }
         boolean now = current != -1;
         if (foreground != now || (now && current != windowId)) {
-            policy.invalidate(); logic.reset(); farm = false;
+            policy.invalidate(); pipeline.clear(); logic.reset(); farm = false;
             if (!now && foreground) paused++;
             foreground = now; windowId = current;
             reason = now ? "微信前台，低频探测场景" : "非微信前台或屏幕锁定，暂停";
@@ -241,23 +285,31 @@ public class FarmAccessibilityService extends AccessibilityService {
         long now = SystemClock.elapsedRealtime();
         if (farm && now - farmSeen > 10000) { farm = false; policy.clearBurst(); logic.reset(); }
         snapshot();
-        handler.postDelayed(sample, Math.max(0, policy.next(now, farm) - now));
+        if (pipeline.captureBusy()) return; // callback schedules the next capture
+        handler.postDelayed(sample, Math.max(0, Math.max(policy.next(now, farm), nextCaptureAllowed) - now));
     }
 
     private void sample() {
+        checkTimeouts();
         if (!alive() || !isRunning) return;
         if (!updateForeground()) { schedule(); return; }
-        if (busy) { handler.postDelayed(sample, 400); return; }
+        if (pipeline.captureBusy()) return;
         long now = SystemClock.elapsedRealtime();
-        long next = policy.next(now, farm);
+        long next = Math.max(policy.next(now, farm), nextCaptureAllowed);
         if (next > now) { handler.postDelayed(sample, next - now); return; }
         int token = policy.generation(), target = windowId;
-        policy.captured(now); busy = true;
+        long uptime = SystemClock.uptimeMillis(), wall = System.currentTimeMillis();
+        long request = pipeline.beginCapture(uptime);
+        if (request == 0) return;
+        armWatchdog(true, request, uptime);
+        if (lastCaptureUptime >= 0) captureInterval = uptime-lastCaptureUptime;
+        lastCaptureUptime = uptime;
+        policy.captured(now);
         try {
-            if (Build.VERSION.SDK_INT >= 34) takeScreenshotOfWindow(target, mainExecutor, callback(token, target));
-            else if (Build.VERSION.SDK_INT >= 30) takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, callback(token, target));
-            else { busy = false; lastStatus = "Android 11 以下不支持无障碍截图"; }
-        } catch (RuntimeException e) { busy = false; errors++; lastError = "screenshot_request"; reason = "截图请求失败"; lastStatus = reason; diagLog("screenshot request failed"); publish(); }
+            if (Build.VERSION.SDK_INT >= 34) takeScreenshotOfWindow(target, mainExecutor, callback(token, target, request, uptime, wall));
+            else if (Build.VERSION.SDK_INT >= 30) takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, callback(token, target, request, uptime, wall));
+            else { pipeline.endCapture(request); lastStatus = "Android 11 以下不支持无障碍截图"; }
+        } catch (RuntimeException e) { pipeline.endCapture(request); errors++; lastError = "screenshot_request"; reason = "截图请求失败"; lastStatus = reason; diagLog("screenshot request failed"); publish(); }
         schedule();
     }
 
@@ -266,52 +318,111 @@ public class FarmAccessibilityService extends AccessibilityService {
     }
 
     @android.annotation.TargetApi(30)
-    private TakeScreenshotCallback callback(int token, int target) {
+    private TakeScreenshotCallback callback(int token, int target, long request, long requestUptime, long requestWall) {
         return new TakeScreenshotCallback() {
             @Override public void onSuccess(ScreenshotResult result) {
                 HardwareBuffer buffer = result.getHardwareBuffer();
                 Bitmap hardware = null, copy = null;
-                boolean launched = false;
                 try {
-                    if (!valid(token, target)) return;
+                    checkTimeouts();
+                    boolean timedOut = pipeline.captureTimedOut() && !pipeline.captureUsable(request);
+                    boolean usable = pipeline.captureUsable(request);
+                    if (!pipeline.endCapture(request)) return;
+                    recoveredAfterTimeout(timedOut);
+                    if (!usable || !valid(token, target)) return;
+                    long callbackUptime = SystemClock.uptimeMillis(), callbackWall = System.currentTimeMillis();
+                    long capturedUptime = FramePipeline.captureUptime(result.getTimestamp(), requestUptime, callbackUptime);
+                    long capturedWall = FramePipeline.captureWall(result.getTimestamp(), requestUptime, requestWall, callbackUptime, callbackWall);
                     screenshots++;
                     hardware = Bitmap.wrapHardwareBuffer(buffer, result.getColorSpace());
                     if (hardware == null) throw new IllegalStateException("empty screenshot");
                     copy = hardware.copy(Bitmap.Config.ARGB_8888, false);
                     if (copy == null) throw new IllegalStateException("copy failed");
-                    final Bitmap frame = copy;
-                    final long capturedAt = System.currentTimeMillis(), started = SystemClock.elapsedRealtime();
-                    recognizer.process(InputImage.fromBitmap(frame, 0)).addOnCompleteListener(mainExecutor, task -> {
-                        try {
-                            if (!valid(token, target)) return;
-                            ocr++; ocrMs = SystemClock.elapsedRealtime() - started;
-                            if (!task.isSuccessful() || task.getResult() == null) {
-                                ocrFailures++; lastError = "ocr_failed";
-                                farm = false; policy.clearBurst(); logic.reset(); reason = "OCR失败"; lastStatus = reason;
-                            } else processText(task.getResult(), frame.getWidth(), frame.getHeight(), capturedAt, token, target);
-                            publish();
-                        } catch (RuntimeException e) { if (alive()) { ocrFailures++; lastError = "ocr_processing"; farm = false; policy.clearBurst(); logic.reset(); reason = "OCR处理失败"; lastStatus = reason; publish(); } }
-                        finally { frame.recycle(); if (alive()) { busy = false; schedule(); } }
-                    });
-                    launched = true;
+                    pipeline.offer(new FramePipeline.Frame<>(copy, copy.getAllocationByteCount(), capturedWall,
+                            capturedUptime, token, target, request), callbackUptime);
                     copy = null;
-                } catch (RuntimeException e) { if (alive()) { errors++; lastError = "screenshot_processing"; logic.reset(); reason = "截图处理失败"; lastStatus = reason; diagLog("screenshot processing failed"); publish(); } }
+                } catch (RuntimeException e) { if (valid(token, target)) { errors++; lastError = "screenshot_processing"; logic.reset(); reason = "截图处理失败"; lastStatus = reason; diagLog("screenshot processing failed"); publish(); } }
                 finally {
                     if (hardware != null) hardware.recycle();
                     buffer.close();
                     if (copy != null) copy.recycle();
-                    if (!launched && alive()) { busy = false; schedule(); }
+                    FarmAccessibilityService owner = instance;
+                    if (owner != null && owner.alive()) { owner.pumpOcr(); owner.publish(); owner.schedule(); }
                 }
             }
             @Override public void onFailure(int code) {
-                if (!alive()) return;
-                busy = false;
-                lastError = "screenshot_code_" + code;
-                diagLog("screenshot failure code=" + code);
-                if (valid(token, target)) { errors++; logic.reset(); reason = "截图错误代码 " + code + "（安全窗口或系统限制可能阻止截图）"; lastStatus = reason; publish(); }
+                checkTimeouts();
+                boolean timedOut = pipeline.captureTimedOut() && !pipeline.captureUsable(request);
+                boolean usable = pipeline.captureUsable(request);
+                if (!pipeline.endCapture(request)) return;
+                recoveredAfterTimeout(timedOut);
+                if (!alive()) { FarmAccessibilityService owner = instance; if (owner != null && owner.alive()) owner.schedule(); return; }
+                if (usable && valid(token, target)) {
+                    lastError = "screenshot_code_" + code;
+                    diagLog("screenshot failure code=" + code);
+                    if (code == ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT) nextCaptureAllowed = SystemClock.elapsedRealtime()+2000;
+                    errors++; logic.reset(); reason = "截图错误代码 " + code + "（安全窗口或系统限制可能阻止截图）"; lastStatus = reason; publish();
+                }
                 schedule();
             }
         };
+    }
+
+    private void pumpOcr() {
+        checkTimeouts();
+        if (!alive() || !isRunning || !foreground || pipeline.ocrBusy() || !pipeline.startAllowed()) return;
+        if (recognizer == null) recognizer = TextRecognition.getClient(new ChineseTextRecognizerOptions.Builder().build());
+        FramePipeline.Frame<Bitmap> frame = pipeline.beginOcr(SystemClock.uptimeMillis());
+        if (frame == null) return;
+        if (!valid(frame.generation, frame.window)) { pipeline.finishOcr(frame.request); pumpOcr(); return; }
+        ocrOwner = this;
+        ocrStartedUptime = SystemClock.uptimeMillis();
+        armWatchdog(false, frame.request, ocrStartedUptime);
+        try {
+            recognizer.process(InputImage.fromBitmap(frame.value, 0)).addOnCompleteListener(mainExecutor, task -> {
+                try {
+                    checkTimeouts();
+                    if (!pipeline.ocrUsable(frame.request)) return;
+                    if (!valid(frame.generation, frame.window)) return;
+                    if (SystemClock.uptimeMillis()-frame.uptime > FramePipeline.TTL_MS) { pipeline.dropExpired++; logic.reset(); return; }
+                    if (lastProcessedRequest + 1 != frame.request) logic.reset();
+                    lastProcessedRequest = frame.request;
+                    ocr++; ocrMs = SystemClock.uptimeMillis()-ocrStartedUptime;
+                    if (!task.isSuccessful() || task.getResult() == null) {
+                        ocrFailures++; lastError = "ocr_failed"; farm = false; policy.clearBurst(); logic.reset(); reason = "OCR失败"; lastStatus = reason;
+                    } else processText(task.getResult(), frame.value.getWidth(), frame.value.getHeight(), frame.wall, frame.generation, frame.window);
+                    publish();
+                } catch (RuntimeException e) {
+                    if (valid(frame.generation, frame.window)) { ocrFailures++; lastError = "ocr_processing"; farm = false; policy.clearBurst(); logic.reset(); reason = "OCR处理失败"; lastStatus = reason; publish(); }
+                } finally { finishOcr(frame); }
+            });
+        } catch (RuntimeException e) {
+            if (valid(frame.generation, frame.window)) { ocrFailures++; lastError = "ocr_start"; logic.reset(); reason = "OCR启动失败"; lastStatus = reason; publish(); }
+            finishOcr(frame);
+        }
+    }
+
+    private void armWatchdog(boolean capture, long request, long started) {
+        long delay = Math.max(0, FramePipeline.REQUEST_TIMEOUT_MS - (SystemClock.uptimeMillis()-started));
+        handler.postDelayed(() -> {
+            if (!alive()) return;
+            boolean timedOut = capture ? pipeline.timeoutCapture(request, SystemClock.uptimeMillis())
+                    : pipeline.timeoutOcr(request, SystemClock.uptimeMillis());
+            if (timedOut) {
+                setRunning(false);
+                lastError = capture ? "screenshot_timeout_inflight" : "ocr_timeout_inflight"; publish();
+            }
+        }, delay);
+    }
+
+    private void finishOcr(FramePipeline.Frame<Bitmap> frame) {
+        boolean timedOut = pipeline.ocrTimedOut() && !pipeline.ocrUsable(frame.request);
+        if (!pipeline.finishOcr(frame.request)) return;
+        ocrStartedUptime = 0; ocrOwner = null;
+        if (closeRecognizerWhenIdle && recognizer != null) { recognizer.close(); recognizer = null; }
+        recoveredAfterTimeout(timedOut);
+        FarmAccessibilityService owner = instance;
+        if (owner != null && owner.alive()) { owner.pumpOcr(); owner.publish(); }
     }
 
     private void processText(Text text, int width, int height, long capturedAt, int token, int target) {
@@ -343,7 +454,11 @@ public class FarmAccessibilityService extends AccessibilityService {
         diagnostics = "截图 " + screenshots + " · 点击事件 " + clicks + " · 内容事件 " + contents
                 + " · OCR " + ocr + "（最近 " + ocrMs + "ms）\n暂停 " + paused + " · 昵称/场景未确认 " + rejectedFriend
                 + " · 无成熟时间 " + rejectedTime + " · 候选 " + candidates + " · 新增 " + added
-                + " · 重复 " + duplicate + " · 截图错误 " + errors + "\n" + reason;
+                + " · 重复 " + duplicate + " · 截图错误 " + errors
+                + "\n截图中 " + pipeline.captureBusy() + " · OCR中 " + pipeline.ocrBusy() + " · 待识别 " + pipeline.pendingCount()
+                + " / " + pipeline.pendingBytes() + "B · 队列峰值 " + pipeline.maxQueueObserved
+                + " · 丢弃(满/过期/失效) " + pipeline.dropFull + "/" + pipeline.dropExpired + "/" + pipeline.dropInvalidated
+                + " · 截图间隔 " + captureInterval + "ms · 排队 " + pipeline.lastQueueWaitMs + "ms\n" + reason;
         snapshot();
         long now = SystemClock.elapsedRealtime();
         if (debugEnabled() && now - lastSummaryLog >= 5000) {
@@ -361,11 +476,11 @@ public class FarmAccessibilityService extends AccessibilityService {
         if (owner) {
             isRunning = false; isConnected = false; instance = null;
             getSharedPreferences("settings", MODE_PRIVATE).edit().putBoolean("monitoringEnabled", false).apply();
-            lastStatus = "服务断开，请重新启动监测";
+            lastStatus = pipeline.startAllowed() ? "服务断开，请重新启动监测" : blockedStatus();
         }
-        handler.removeCallbacks(sample); policy.invalidate(); logic.reset();
-        try { unregisterReceiver(screenReceiver); } catch (IllegalArgumentException ignored) { }
-        if (recognizer != null) recognizer.close();
+        handler.removeCallbacks(sample); policy.invalidate(); if (owner) pipeline.clear(); logic.reset();
+        if (receiverRegistered) { try { unregisterReceiver(screenReceiver); } catch (IllegalArgumentException ignored) { } receiverRegistered = false; }
+        if (recognizer != null) { if (ocrOwner == this) closeRecognizerWhenIdle = true; else { recognizer.close(); recognizer = null; } }
         snapshot(); diagLog("destroy");
         super.onDestroy();
     }
