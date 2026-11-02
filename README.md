@@ -18,6 +18,16 @@ Android 12+ 可在系统设置中允许精确闹钟；未允许时自动使用�
 
 OCR、好友名称位置和界面文案取决于游戏实际画面：遮挡、误识别、界面变化、旋转、多窗口等可能无法识别或误识别；切换好友时请等待画面稳定。同昵称好友无法区分，成熟时间接近时可能被当作重复记录。“回家”标志是启发式场景证据，不保证排除所有其他界面。支持单行成熟倒计时，或空间紧邻的独立时间与“后成熟”行；不拼接远处文字，也不把阶段倒计时当成成熟时间。新截图通道尚未完成真机验证。请自行核对记录。
 
+## 调试取证
+
+调试包在服务实例存在时可读取匿名的内存快照：
+
+```sh
+adb shell dumpsys activity service com.local.farmreminder/.FarmAccessibilityService
+```
+
+快照包含生命周期、前台状态、窗口 ID、截图/OCR 计数及拒绝原因，不包含截图、OCR 原文或昵称；包名仅区分微信、其他和空值。`FarmDiag` 调试日志也不包含这些个人数据。窗口 ID 是动态诊断信息，不是持久标识。服务未运行时系统可能无法找到实例；正式包不输出快照。不要使用 `uiautomator dump` 取证：它可能临时抑制或解绑其他无障碍服务，此期间启用服务列表为空不代表用户关闭了授权。
+
 ## 构建
 
 需要 JDK 17、Android SDK 35、Gradle 8.11.1。配置本机 `local.properties` 或 `ANDROID_HOME`，运行 `gradle :app:assembleDebug` 和 `gradle :app:testDebugUnitTest`，也可使用仓库提供的 Gradle wrapper。不要提交 local.properties、构建产物或用户数据。

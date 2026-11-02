@@ -8,6 +8,7 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.pm.ApplicationInfo;
 import android.graphics.Bitmap;
 import android.graphics.Rect;
 import android.hardware.HardwareBuffer;
@@ -15,7 +16,9 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.os.Process;
 import android.os.SystemClock;
+import android.util.Log;
 import android.view.Display;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityManager;
@@ -31,12 +34,24 @@ import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicLong;
+import java.io.FileDescriptor;
+import java.io.PrintWriter;
 
 /** User-controlled, local-only screenshots; all mutable instance state is on the main thread. */
 public class FarmAccessibilityService extends AccessibilityService {
     public static volatile boolean isConnected, isRunning;
     public static volatile String lastStatus = "无障碍服务未连接", diagnostics = "本次会话尚无数据";
     private static volatile FarmAccessibilityService instance;
+    private static final AtomicLong NEXT_INSTANCE = new AtomicLong();
+    // Lifecycle callbacks and these counters are confined to the main thread.
+    private static long connectionCount, unbindCount, destroyCount, lifecycleSequence;
+    private final long instanceSequence = NEXT_INSTANCE.incrementAndGet();
+    private volatile String dumpSnapshot = "snapshot not yet available";
+    private long connectedSequence, unbindSequence, destroySequence;
+    private long connectedAt = -1, unbindAt = -1, destroyAt = -1, lastSummaryLog = -5000;
+    private long ocrFailures;
+    private String foregroundPackage = "null", lastError = "none";
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Executor mainExecutor = handler::post;
     private final SamplingPolicy policy = new SamplingPolicy();
@@ -53,6 +68,45 @@ public class FarmAccessibilityService extends AccessibilityService {
     };
 
     private boolean alive() { return InstanceOwner.alive(instance, this, destroyed); }
+
+    private boolean debugEnabled() {
+        return (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+    }
+
+    // Only immutable, anonymous data captured on the main thread is read by dump's binder thread.
+    private void snapshot() {
+        if (!debugEnabled()) return;
+        dumpSnapshot = "pid=" + Process.myPid() + " instance=" + instanceSequence
+                + " generation=" + policy.generation() + " owner=" + (instance == this)
+                + " destroyed=" + destroyed + " connected=" + (instance == this && isConnected)
+                + " running=" + (instance == this && isRunning) + " foreground=" + foreground
+                + " farm=" + farm + " windowId=" + windowId + " package=" + foregroundPackage
+                + " busy=" + busy + " screenshots=" + screenshots + " ocr=" + ocr
+                + " ocrMs=" + ocrMs + " ocrFailures=" + ocrFailures + " errors=" + errors
+                + " lastError=" + lastError + " rejectedFriend=" + rejectedFriend
+                + " rejectedTime=" + rejectedTime + " candidates=" + candidates
+                + " added=" + added + " duplicate=" + duplicate + " reason=" + reason
+                + " connectedSeq=" + connectedSequence + " connectedElapsedMs=" + connectedAt
+                + " unbindSeq=" + unbindSequence + " unbindElapsedMs=" + unbindAt
+                + " destroySeq=" + destroySequence + " destroyElapsedMs=" + destroyAt
+                + " processConnections=" + connectionCount + " processUnbinds=" + unbindCount
+                + " processDestroys=" + destroyCount;
+    }
+
+    private void diagLog(String event) {
+        if (debugEnabled()) Log.d("FarmDiag", "instance=" + instanceSequence + " " + event);
+    }
+
+    @Override protected void dump(FileDescriptor fd, PrintWriter writer, String[] args) {
+        if (!debugEnabled()) return;
+        writer.println(dumpSnapshot);
+    }
+
+    @Override public int onStartCommand(Intent intent, int flags, int startId) {
+        int result = super.onStartCommand(intent, flags, startId);
+        snapshot();
+        return result;
+    }
 
     public static boolean isEnabled(Context context) {
         AccessibilityManager manager = (AccessibilityManager) context.getSystemService(Context.ACCESSIBILITY_SERVICE);
@@ -85,7 +139,11 @@ public class FarmAccessibilityService extends AccessibilityService {
     @Override protected void onServiceConnected() {
         super.onServiceConnected();
         if (destroyed) return;
+        connectedSequence = ++lifecycleSequence; connectionCount++;
+        connectedAt = SystemClock.elapsedRealtime();
+        FarmAccessibilityService previous = instance;
         instance = this; isConnected = true; isRunning = false;
+        if (previous != null && previous != this) previous.snapshot();
         getSharedPreferences("settings", MODE_PRIVATE).edit().putBoolean("monitoringEnabled", false).apply();
         recognizer = TextRecognition.getClient(new ChineseTextRecognizerOptions.Builder().build());
         IntentFilter filter = new IntentFilter();
@@ -93,15 +151,17 @@ public class FarmAccessibilityService extends AccessibilityService {
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(screenReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
         else registerReceiver(screenReceiver, filter);
         lastStatus = "服务已连接，请手动启动监测";
+        snapshot(); diagLog("connected");
     }
 
     private void setRunning(boolean running) {
         if (!alive()) return;
         getSharedPreferences("settings", MODE_PRIVATE).edit().putBoolean("monitoringEnabled", running).apply();
-        handler.removeCallbacks(sample); policy.invalidate(); logic.reset(); farm = false; foreground = false; windowId = -1;
+        handler.removeCallbacks(sample); policy.invalidate(); logic.reset(); farm = false; foreground = false; windowId = -1; foregroundPackage = "null";
         isRunning = running;
         lastStatus = running ? "等待微信前台" : "已停止";
         reason = running ? "等待微信前台" : "已停止"; publish();
+        diagLog(running ? "start" : "stop");
         if (running) { updateForeground(); schedule(); }
     }
 
@@ -124,21 +184,27 @@ public class FarmAccessibilityService extends AccessibilityService {
     }
 
     @Override public boolean onUnbind(Intent intent) {
+        unbindSequence = ++lifecycleSequence; unbindCount++;
+        unbindAt = SystemClock.elapsedRealtime();
         if (alive()) {
             setRunning(false);
             isConnected = false; instance = null;
             lastStatus = "服务断开，请重新启动监测";
         }
+        snapshot(); diagLog("unbind");
         return super.onUnbind(intent);
     }
 
     private int foregroundWindow() {
+        foregroundPackage = "null";
         PowerManager power = (PowerManager) getSystemService(POWER_SERVICE);
         KeyguardManager keyguard = (KeyguardManager) getSystemService(KEYGUARD_SERVICE);
         if (power == null || !power.isInteractive() || keyguard == null || keyguard.isKeyguardLocked()) return -1;
         AccessibilityNodeInfo active = getRootInActiveWindow();
         if (active == null) return -1;
         try {
+            CharSequence pkg = active.getPackageName();
+            foregroundPackage = pkg == null ? "null" : ("com.tencent.mm".contentEquals(pkg) ? "com.tencent.mm" : "other");
             if (!"com.tencent.mm".contentEquals(active.getPackageName())) return -1;
             int activeId = active.getWindowId();
             for (AccessibilityWindowInfo window : getWindows()) {
@@ -162,16 +228,19 @@ public class FarmAccessibilityService extends AccessibilityService {
             reason = now ? "微信前台，低频探测场景" : "非微信前台或屏幕锁定，暂停";
             lastStatus = reason; publish();
         }
+        snapshot();
         return now;
     }
 
     private void schedule() {
         if (!alive()) return;
         handler.removeCallbacks(sample);
+        snapshot();
         if (!isRunning) return;
         if (!foreground) { handler.postDelayed(sample, 2000); return; }
         long now = SystemClock.elapsedRealtime();
         if (farm && now - farmSeen > 10000) { farm = false; policy.clearBurst(); logic.reset(); }
+        snapshot();
         handler.postDelayed(sample, Math.max(0, policy.next(now, farm) - now));
     }
 
@@ -188,7 +257,7 @@ public class FarmAccessibilityService extends AccessibilityService {
             if (Build.VERSION.SDK_INT >= 34) takeScreenshotOfWindow(target, mainExecutor, callback(token, target));
             else if (Build.VERSION.SDK_INT >= 30) takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, callback(token, target));
             else { busy = false; lastStatus = "Android 11 以下不支持无障碍截图"; }
-        } catch (RuntimeException e) { busy = false; errors++; reason = "截图请求失败"; lastStatus = reason; publish(); }
+        } catch (RuntimeException e) { busy = false; errors++; lastError = "screenshot_request"; reason = "截图请求失败"; lastStatus = reason; diagLog("screenshot request failed"); publish(); }
         schedule();
     }
 
@@ -217,15 +286,16 @@ public class FarmAccessibilityService extends AccessibilityService {
                             if (!valid(token, target)) return;
                             ocr++; ocrMs = SystemClock.elapsedRealtime() - started;
                             if (!task.isSuccessful() || task.getResult() == null) {
+                                ocrFailures++; lastError = "ocr_failed";
                                 farm = false; policy.clearBurst(); logic.reset(); reason = "OCR失败"; lastStatus = reason;
                             } else processText(task.getResult(), frame.getWidth(), frame.getHeight(), capturedAt, token, target);
                             publish();
-                        } catch (RuntimeException e) { if (alive()) { farm = false; policy.clearBurst(); logic.reset(); reason = "OCR处理失败"; lastStatus = reason; publish(); } }
+                        } catch (RuntimeException e) { if (alive()) { ocrFailures++; lastError = "ocr_processing"; farm = false; policy.clearBurst(); logic.reset(); reason = "OCR处理失败"; lastStatus = reason; publish(); } }
                         finally { frame.recycle(); if (alive()) { busy = false; schedule(); } }
                     });
                     launched = true;
                     copy = null;
-                } catch (RuntimeException e) { if (alive()) { errors++; logic.reset(); reason = "截图处理失败"; lastStatus = reason; publish(); } }
+                } catch (RuntimeException e) { if (alive()) { errors++; lastError = "screenshot_processing"; logic.reset(); reason = "截图处理失败"; lastStatus = reason; diagLog("screenshot processing failed"); publish(); } }
                 finally {
                     if (hardware != null) hardware.recycle();
                     buffer.close();
@@ -236,6 +306,8 @@ public class FarmAccessibilityService extends AccessibilityService {
             @Override public void onFailure(int code) {
                 if (!alive()) return;
                 busy = false;
+                lastError = "screenshot_code_" + code;
+                diagLog("screenshot failure code=" + code);
                 if (valid(token, target)) { errors++; logic.reset(); reason = "截图错误代码 " + code + "（安全窗口或系统限制可能阻止截图）"; lastStatus = reason; publish(); }
                 schedule();
             }
@@ -272,10 +344,19 @@ public class FarmAccessibilityService extends AccessibilityService {
                 + " · OCR " + ocr + "（最近 " + ocrMs + "ms）\n暂停 " + paused + " · 昵称/场景未确认 " + rejectedFriend
                 + " · 无成熟时间 " + rejectedTime + " · 候选 " + candidates + " · 新增 " + added
                 + " · 重复 " + duplicate + " · 截图错误 " + errors + "\n" + reason;
+        snapshot();
+        long now = SystemClock.elapsedRealtime();
+        if (debugEnabled() && now - lastSummaryLog >= 5000) {
+            lastSummaryLog = now;
+            diagLog("summary screenshots=" + screenshots + " ocr=" + ocr + " errors=" + errors
+                    + " rejectedFriend=" + rejectedFriend + " rejectedTime=" + rejectedTime);
+        }
     }
 
     @Override public void onDestroy() {
         boolean owner = alive();
+        destroySequence = ++lifecycleSequence; destroyCount++;
+        destroyAt = SystemClock.elapsedRealtime();
         destroyed = true;
         if (owner) {
             isRunning = false; isConnected = false; instance = null;
@@ -285,6 +366,7 @@ public class FarmAccessibilityService extends AccessibilityService {
         handler.removeCallbacks(sample); policy.invalidate(); logic.reset();
         try { unregisterReceiver(screenReceiver); } catch (IllegalArgumentException ignored) { }
         if (recognizer != null) recognizer.close();
+        snapshot(); diagLog("destroy");
         super.onDestroy();
     }
 }

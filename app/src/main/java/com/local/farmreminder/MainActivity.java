@@ -102,7 +102,7 @@ public class MainActivity extends Activity {
         addText(capture, "可自行选择启用无障碍服务：用于读取前台窗口线索，并获取本地单张截图来识别倒计时。不自动点击、不上传、不保存截图。", 14, MUTED, false, 9);
         addText(capture, "启用服务后，仍需手动开始监测。离开微信暂停；小游戏窗口身份待验证，可能需要少量画面探测。请保持好友名和成熟倒计时清晰可见。", 13, MUTED, false, 9);
         captureStatus = addText(capture, "未运行", 13, INK, false, 14);
-        startButton = button(capture, "启用无障碍服务", true, 16, this::requestMonitoring);
+        startButton = button(capture, "检查无障碍设置", true, 16, this::requestMonitoring);
         stopButton = button(capture, "停止监测", false, 8, () -> {
             try {
                 FarmAccessibilityService.setMonitoring(this, false);
@@ -181,13 +181,18 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT < 30) {
             showFeedback("此设备低于 Android 11，不支持所需的无障碍截图，无法开始监测。已有提醒仍可使用。");
         } else if (!FarmAccessibilityService.isEnabled(this)) {
+            showFeedback("服务当前不可用，等待系统连接或恢复；请检查系统无障碍设置。尚未开始监测，当前状态不代表你已关闭授权。");
             openSettings(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
         } else if (!FarmAccessibilityService.isConnected) {
-            showFeedback("设置中已启用服务，正在等待系统连接；尚未开始监测。可稍后返回检查，或查看无障碍设置。");
+            showFeedback("等待系统连接无障碍服务；尚未开始监测。需服务已连接才能启动，可稍后返回检查，或查看系统无障碍设置。");
         } else if (!FarmAccessibilityService.isRunning) {
             try {
                 FarmAccessibilityService.setMonitoring(this, true);
-                showFeedback("已提交开始请求，请查看下方状态；切换到微信后按窗口线索进行监测。");
+                if (FarmAccessibilityService.isConnected && FarmAccessibilityService.isRunning) {
+                    showFeedback("监测已开启；切换到微信后按窗口线索进行监测。");
+                } else {
+                    showFeedback("监测未能启动，需无障碍服务已连接；请等待系统恢复并检查系统无障碍设置后重试。");
+                }
             } catch (RuntimeException e) {
                 showFeedback("无法开始监测，请检查无障碍服务状态后重试。");
             }
@@ -268,8 +273,10 @@ public class MainActivity extends Activity {
         boolean connected = FarmAccessibilityService.isConnected;
         boolean running = FarmAccessibilityService.isRunning;
         String readiness = !supported ? "需要 Android 11 及以上；此设备不支持无障碍截图，无法开始监测。"
-                : !enabled ? "无障碍服务未启用；可自行选择前往系统设置开启。"
-                : !connected ? "无障碍服务已启用，等待系统连接；当前无法开始监测。"
+                : !enabled ? (connected
+                        ? "服务当前不可用，等待系统恢复；请检查系统无障碍设置。连接标记仍在，但当前查询无法确认服务可用，不代表已关闭授权。"
+                        : "服务当前不可用／等待系统连接；请检查系统无障碍设置。当前查询无法确认服务可用，不代表已关闭授权。")
+                : !connected ? "等待系统连接无障碍服务；当前无法开始监测，请检查系统无障碍设置。"
                 : "无障碍服务已连接";
         runningLabel.setText(!supported ? "○  此设备不支持监测"
                 : !enabled || !connected ? "○  服务尚未就绪"
@@ -280,7 +287,7 @@ public class MainActivity extends Activity {
         diagnosticsText.setText(blank(diagnostics) ? "暂无诊断数据。开始后可查看截图计数、OCR 处理与拒绝原因；不展示原图或完整识别文本。" : diagnostics);
         startButton.setEnabled(supported && !running && (!enabled || connected));
         startButton.setAlpha(startButton.isEnabled() ? 1f : 0.55f);
-        startButton.setText(!supported ? "此设备不支持监测" : !enabled ? "启用无障碍服务"
+        startButton.setText(!supported ? "此设备不支持监测" : !enabled ? "检查无障碍设置"
                 : !connected ? "等待服务连接…" : running ? "监测已开启" : "开始监测");
         stopButton.setVisibility(running ? View.VISIBLE : View.GONE);
         boolean notified = notificationsAllowed();
