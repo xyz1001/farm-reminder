@@ -34,6 +34,12 @@ adb shell dumpsys activity service com.local.farmreminder/.FarmAccessibilityServ
 
 ### 私有截图的无界面 OCR 回放
 
-仅在用户授权后，将待测截图命名为 `farm-friend-readonly.png` 放入仓库外的独立目录（目录中不要放其他文件），以 `gradle :app:assembleDebugAndroidTest -PocrFixtureDir=<目录>` 打包测试 APK。测试 APK 包含完整私有截图，不可提交或分享。安装测试 APK 后，可用 `adb shell am instrument -w -e left <左> -e top <上> -e right <右> -e bottom <下> com.local.farmreminder.test/com.local.farmreminder.FixtureOcrInstrumentation` 回放；坐标是截图像素中的倒计时区域。它不启动 Activity 或使用 UI 自动化，输出区域内行和元素的位置，以及仅保留数字、冒号和“后成熟”的脱敏文本和全帧解析结果。普通单元测试不需要此截图。
+仅在用户授权后，将待测截图命名为 `farm-friend-readonly.png` 或 `farm-current-readonly.png` 放入仓库外的独立目录（目录中不要放其他文件），以 `gradle :app:assembleDebugAndroidTest -PocrFixtureDir=<目录>` 打包测试 APK。测试 APK 包含完整私有截图，不可提交或分享。只安装测试 APK 后，运行 `adb shell am instrument -w -e fixture friend -e mode baseline com.local.farmreminder.test/com.local.farmreminder.FixtureOcrInstrumentation`；`fixture` 可选 `friend` / `current`，`mode` 可选 `baseline` / `roi`。每次输出冷启动、两次预热后五次热运行的预处理、OCR 和二者之和中位数，及每次成熟解析、好友确认布尔值和输入像素数；不输出昵称。可选 `-e left <左> -e top <上> -e right <右> -e bottom <下>` 输出截图坐标范围内行和元素的位置及仅保留数字、冒号和“后成熟”的脱敏文本。普通单元测试和构建不需要截图。
 
-Instrumentation 会重启目标应用进程，可能中断已有监测会话；不要在需要保留会话时运行。完成后，按授权范围处理测试 APK 和临时截图，其内部可能仍含私有画面。
+Instrumentation 会重启目标应用进程，可能中断已有监测会话；不要在需要保留会话时运行。完成后立即卸载 `com.local.farmreminder.test`，删除临时截图副本，运行 `gradle clean :app:assembleDebugAndroidTest` 清除含图构建中间件并重建不含截图的测试 APK，检查 APK 内不含图片；授权原图按原约定保留。
+
+### ROI 实验（未启用）
+
+测试专用 atlas 按原像素拼接顶部身份 x=.10–.56/y=.025–.14、详情 x=0–1/y=.32–.71、回家 x=.74–1/y=.72–.87；区域间及外侧白边 32 像素，不二值化或缩放。行/元素框必须完整落在单块内才映射回原图坐标，跨边界或白缝丢弃。假设针对竖屏画面，比例和边界不保证适配不同布局。成熟和好友仍使用现有解析逻辑，不能根据数字或阶段时间猜成熟。
+
+一次相同设备同模型静态图对照显示好友图全屏和 atlas 的成熟结果一致，但 atlas 未确认好友，且热总耗时中位数 155ms 高于全屏 143ms；自己农场负例均未确认好友或成熟（197ms 对 200ms）。仅为两张静态图的实验，不能证明漏识别原因或概括其他设备；因此生产服务仍使用全屏 OCR，没有启用 atlas 或新增回退策略。

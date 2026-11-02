@@ -4,6 +4,9 @@ android {
     namespace 'com.local.farmreminder'
     compileSdk 35
     defaultConfig { applicationId 'com.local.farmreminder'; minSdk 26; targetSdk 35; versionCode 1; versionName '1.0'; testInstrumentationRunner 'com.local.farmreminder.FixtureOcrInstrumentation' }
+    // Experimental ROI code is packaged in the test APK, not the installed main APK.
+    sourceSets.test.java.srcDir 'src/roi/java'
+    sourceSets.androidTest.java.srcDir 'src/roi/java'
     if (project.hasProperty('ocrFixtureDir')) {
         sourceSets.androidTest.assets.srcDir(project.property('ocrFixtureDir'))
     }
