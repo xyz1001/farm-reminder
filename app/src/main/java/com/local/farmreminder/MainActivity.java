@@ -159,7 +159,7 @@ public class MainActivity extends Activity {
         shizukuStatus = addText(capture, "Shizuku · 待检查", 13, GREEN, true, 9);
         shizukuPermissionButton = button(capture, "请求 Shizuku 授权 / 刷新状态", false, 8, () -> {
             ShizukuTaskGate.get(this).requestPermission();
-            showFeedback("已检查 Shizuku 授权状态；先在 Shizuku 中启动服务，再点授权。状态更新见上方。");
+            showFeedback("已请求检查 Shizuku 运行与授权状态，请查看上方状态更新；如弹出授权请求，请自行确认。支持已授权的 Root 或 ADB Shell 运行方式，无需切换方式。");
             refresh();
         });
         addText(capture, "满足所选模式的截图条件后，以 500 毫秒为目标间隔截取整屏。每次进入只观察首20秒：期间识别到有效成熟倒计时（包括已有提醒）即可继续截图，不要求读到昵称；之后不会因暂时无结果而暂停。首20秒始终无结果则暂停本次停留的新增截图，已保存图片继续识别。离开后重新进入、上下文变化或手动停止再开始可重试；迟到识别不会自动恢复已超时的截图。缺权限、锁屏或状态未知时仍暂停，手动停止也暂停队列处理。\n成熟词不证明游戏身份。请先关闭敏感页面，再手动进入农场。系统快照、使用记录和识别可能延迟，前台判断与截图不是原子操作，切换或覆盖可能截到其他应用或系统内容，多窗口不可靠，不保证只截农场或消除风控。", 13, MUTED, false, 9);
@@ -277,7 +277,9 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT < 30) {
             showFeedback("此设备低于 Android 11，不支持所需的无障碍截图，无法开始监测。已有提醒仍可使用。");
         } else if (ShizukuTaskGate.isEnabled(this) && !ShizukuTaskGate.get(this).hasPermission()) {
-            showFeedback("Shizuku 尚未就绪，不能开始监测。先在 Shizuku 中以 ADB／无线调试 shell 模式启动服务（不支持 root），再点击本页授权按钮；不会自动回退使用情况模式。");
+            showFeedback("Shizuku 尚未就绪，请查看运行与授权状态。当前状态："
+                    + ShizukuTaskGate.get(this).status()
+                    + "。请确认 Shizuku 服务已运行，并通过本页按钮检查或请求授权；支持已授权的 Root 或 ADB Shell 运行方式，无需切换方式。尚未开始监测，不会自动回退使用情况模式。");
         } else if (!ShizukuTaskGate.isEnabled(this) && !UsageAccessGate.hasPermission(this)) {
             showFeedback("尚未允许使用情况访问，不能开始监测。请在系统设置中允许，返回后手动开始。");
             openUsageAccessSettings();
@@ -487,7 +489,7 @@ public class MainActivity extends Activity {
         shizukuPermissionButton.setVisibility(useShizuku ? View.VISIBLE : View.GONE);
         if (useShizuku) shizukuStatus.setText("Shizuku · " + ShizukuTaskGate.get(this).status());
         modeDescription.setText(useShizuku
-                ? "当前：Shizuku 系统任务模式。先安装 Shizuku，以 ADB／无线调试 shell 模式启动服务（不支持 root），再点授权。无需使用情况访问。只读固定系统任务命令，需前台任务、焦点、可见／RESUMED 状态与精确“QQ经典农场”任务描述标题匹配才截图；不是无障碍窗口标题。断连、撤权、快照过期或格式未知会暂停新增，不自动回退。权限范围实际比使用情况访问更大；标题兼容性待真机验收，不保证实时或无风险。"
+                ? "当前：Shizuku 系统任务模式。支持用户已授权的 Shizuku Root 或 ADB Shell 运行方式；本工具不主动提权或启动 Shizuku，授权须自行点击确认。无需使用情况访问。只读固定系统任务命令，需前台任务、焦点、可见／RESUMED 状态与精确“QQ经典农场”任务描述标题匹配才截图；不是无障碍窗口标题。断连、撤权、快照过期或格式未知会暂停新增，不自动回退。权限范围实际比使用情况访问更大，Root 运行的授权风险更高；标题兼容性待真机验收，不保证实时或无风险。"
                 : "当前：使用情况模式。需使用情况访问权限，以历史记录中的微信 AppBrand 小程序容器线索开始截图；不限固定容器编号，不能区分具体小程序，可能截图其他小游戏。不是农场身份核验。");
         boolean foregroundActive = MonitorForegroundService.isActive;
         String serviceError = MonitorForegroundService.lastError;
@@ -560,7 +562,7 @@ public class MainActivity extends Activity {
         startButton.setAlpha(startButton.isEnabled() ? 1f : 0.55f);
         startButton.setText(!supported ? "此设备不支持监测"
                 : foregroundStartupPending ? "等待启动…" : !sourceReady
-                ? (useShizuku ? "检查 Shizuku 状态（请先授权）" : "设置使用情况访问权限")
+                ? (useShizuku ? "检查 Shizuku 运行与授权状态" : "设置使用情况访问权限")
                 : !enabled ? "检查无障碍设置"
                 : !connected ? "等待服务连接…" : running ? "监测已开启"
                 : foregroundActive ? "前台监测服务运行中" : "开始监测");

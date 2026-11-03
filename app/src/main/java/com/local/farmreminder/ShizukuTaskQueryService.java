@@ -3,7 +3,7 @@ package com.local.farmreminder;
 import android.os.Bundle;
 import android.os.Process;
 
-/** Runs only as Shizuku's shell user service; no dump leaves this process. */
+/** Runs only as Shizuku's root or shell user service; no dump leaves this process. */
 public final class ShizukuTaskQueryService extends ITaskQuery.Stub {
     private final BoundedProcessQuery runner = new BoundedProcessQuery(
             () -> new ProcessBuilder("/system/bin/dumpsys", "activity", "activities").start());
@@ -15,7 +15,7 @@ public final class ShizukuTaskQueryService extends ITaskQuery.Stub {
     }
 
     @Override public Bundle queryForegroundTask() {
-        if (Process.myUid() != 2000) return unknown("shell required");
+        if (!ShizukuIdentityPolicy.isSupportedUid(Process.myUid())) return unknown("unsupported identity");
         String dump = runner.query();
         if (dump == null) return unknown("query failed");
         TaskDumpParser.Result parsed = TaskDumpParser.parse(dump, true);

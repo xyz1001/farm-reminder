@@ -38,7 +38,7 @@ public final class ShizukuTaskGate {
     private String state = "UNKNOWN", key, component, reason = "not monitoring", status = "未监测";
 
     private final Shizuku.OnBinderReceivedListener received = () -> {
-        synchronized (this) { poll = true; }
+        synchronized (this) { permissionInvalid("Shizuku 连接已更新"); poll = true; }
         wakeControl();
     };
     private final Shizuku.OnBinderDeadListener dead = () -> {
@@ -176,7 +176,7 @@ public final class ShizukuTaskGate {
                 try { Shizuku.unbindUserService(args, old, true); } catch (RuntimeException ignored) { }
             } else if (action == 3) {
                 try {
-                    if (Shizuku.pingBinder() && Shizuku.getUid() == 2000 &&
+                    if (Shizuku.pingBinder() && ShizukuIdentityPolicy.isSupportedUid(Shizuku.getUid()) &&
                             Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) Shizuku.requestPermission(4321);
                 } catch (RuntimeException ignored) { }
                 synchronized (this) { poll = true; }
@@ -184,7 +184,7 @@ public final class ShizukuTaskGate {
                 boolean ok = false; String message = "Shizuku 不可用";
                 try {
                     if (!Shizuku.pingBinder()) message = "Shizuku 未运行";
-                    else if (Shizuku.getUid() != 2000) message = "仅支持 Shell，拒绝 Root";
+                    else if (!ShizukuIdentityPolicy.isSupportedUid(Shizuku.getUid())) message = "不支持的 Shizuku 身份";
                     else if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) message = "等待授权";
                     else { ok = true; message = "等待任务查询"; }
                 } catch (RuntimeException ignored) { }
