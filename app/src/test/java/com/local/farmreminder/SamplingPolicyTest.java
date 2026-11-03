@@ -4,32 +4,30 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class SamplingPolicyTest {
-    @Test public void burstCoalescesAndRespectsMinimumInterval() {
+    @Test public void firstFrameIsImmediateAndNextIsAtLeast500msLater() {
         SamplingPolicy p = new SamplingPolicy();
-        p.event(1000, true); p.event(1100, true);
-        assertEquals(1200, p.next(1100, true));
-        p.captured(1200); p.event(1250, true);
-        assertEquals(1600, p.next(1250, true));
-        p.captured(1600); p.captured(2000);
-        p.event(2100, true); // flood cannot start another burst yet
-        assertEquals(4000, p.next(2100, false));
+        assertEquals(0, p.next(0));
+        p.captured(0);
+        assertEquals(500, p.next(499));
+        assertEquals(500, p.next(500));
     }
-    @Test public void nonFarmEventFloodDoesNotAccelerateProbes() {
+    @Test public void repeatedSchedulerWakeupsCannotAdvanceTheDeadline() {
         SamplingPolicy p = new SamplingPolicy();
         p.captured(1000);
-        for (long now = 1100; now < 3000; now += 100) {
-            p.event(now, false);
-            assertEquals(3000, p.next(now, false));
-        }
+        // Click and content-change events wake the same scheduler without changing policy state.
+        for (long now = 1100; now < 1500; now += 25) assertEquals(1500, p.next(now));
     }
-    @Test public void leavingFarmClearsBurstImmediately() {
+    @Test public void delayedRequestsDoNotCatchUpOrResetAcrossWindowChanges() {
         SamplingPolicy p = new SamplingPolicy();
-        p.captured(1000);
-        p.event(1100, true);
-        assertEquals(1400, p.next(1100, true));
-        p.clearBurst();
-        assertEquals(3000, p.next(1200, false));
-        assertEquals(1700, p.next(1200, true)); // no stale burst on re-entry
+        p.captured(0);
+        assertEquals(700, p.next(700));
+        p.captured(700);
+        assertEquals(1200, p.next(700));
+        p.invalidate(); // switching windows or restarting does not bypass the minimum
+        assertEquals(1200, p.next(900));
+        assertEquals(3000, p.next(3000)); // backpressure recovers late
+        p.captured(3000);
+        assertEquals(3500, p.next(3000));
     }
     @Test public void stopAndBackgroundInvalidate() {
         SamplingPolicy p = new SamplingPolicy();

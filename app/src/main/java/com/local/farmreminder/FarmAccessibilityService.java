@@ -176,9 +176,6 @@ public class FarmAccessibilityService extends AccessibilityService {
         if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED || type == AccessibilityEvent.TYPE_WINDOWS_CHANGED)
             windowPolicy.onWindowEvent(text(event.getPackageName()), text(event.getClassName()), event.getWindowId(), "event");
         updateForeground();
-        if (foreground && event.getPackageName() != null && "com.tencent.mm".contentEquals(event.getPackageName())
-                && (type == AccessibilityEvent.TYPE_VIEW_CLICKED || type == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED))
-            policy.event(SystemClock.elapsedRealtime(), true);
         schedule();
     }
     @Override public void onInterrupt() { if (alive()) { stopSession(true); lastStatus = "服务中断，请重新启动"; } }
@@ -237,13 +234,13 @@ public class FarmAccessibilityService extends AccessibilityService {
         if (capture.captureBusy()) { handler.postDelayed(sample, 1000); return; }
         if (!foreground || !focusVerified || engine == null || !engine.canCapture()) { handler.postDelayed(sample, 1000); return; }
         long now = SystemClock.elapsedRealtime();
-        handler.postDelayed(sample, Math.max(0, Math.max(policy.next(now, true), nextCaptureAllowed) - now));
+        handler.postDelayed(sample, Math.max(0, Math.max(policy.next(now), nextCaptureAllowed) - now));
     }
     private void sample() {
         if (!alive() || !isRunning) return;
         if (!updateForeground() || capture.captureBusy() || engine == null || !engine.canCapture()) { schedule(); return; }
         long now = SystemClock.elapsedRealtime();
-        long next = Math.max(policy.next(now, true), nextCaptureAllowed);
+        long next = Math.max(policy.next(now), nextCaptureAllowed);
         if (next > now) { handler.postDelayed(sample, next - now); return; }
         long uptime = SystemClock.uptimeMillis(), wall = System.currentTimeMillis();
         long request = capture.beginCapture(uptime);
