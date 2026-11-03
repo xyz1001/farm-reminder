@@ -10,6 +10,7 @@ final class FarmIdentityRecognition {
     static Outcome classify(List<OcrLine> lines, int width, int height) {
         if (lines == null || width <= 0 || height <= 0) return Outcome.NO_MATCH;
         boolean fullLogo = false, logo = false, help = false, percent = false;
+        boolean returnHome = false;
         boolean[] menuWords = new boolean[MENU_WORDS.length];
         for (OcrLine line : lines) {
             if (line == null || line.left < 0 || line.top < 0 || line.right <= line.left
@@ -27,15 +28,15 @@ final class FarmIdentityRecognition {
                 try { percent = Double.parseDouble(text.substring(0, text.length() - 1)) <= 100; }
                 catch (NumberFormatException ignored) { }
             }
+            if (text.contains("回家")) returnHome = true;
             for (int i = 0; i < MENU_WORDS.length; i++) {
-                String menuText = i == MENU_WORDS.length - 1 ? text.replace("好友家", "\0") : text;
-                if (menuText.contains(MENU_WORDS[i])) menuWords[i] = true;
+                if (text.contains(MENU_WORDS[i])) menuWords[i] = true;
             }
         }
         if (fullLogo || (logo && (help || percent))) return Outcome.LOADING;
         int count = 0;
         for (boolean found : menuWords) if (found) count++;
-        if (count >= 3) return Outcome.HOME;
+        if (returnHome || count >= 3) return Outcome.HOME;
         return Outcome.NO_MATCH;
     }
 

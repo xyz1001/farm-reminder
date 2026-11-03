@@ -17,6 +17,7 @@ public class FarmIdentityRecognitionTest {
         assertEquals(FarmIdentityRecognition.Outcome.LOADING, check(line("经典农场", 500, 530), line("帮助中心", 850, 220), line("8.54%", 500, 670)));
         assertEquals(FarmIdentityRecognition.Outcome.LOADING, check(line("经典农场", 500, 530), line("8.54%", 500, 670)));
         assertEquals(FarmIdentityRecognition.Outcome.LOADING, check(line("经典农场", 500, 530), line("帮助中心", 850, 220)));
+        assertEquals(FarmIdentityRecognition.Outcome.LOADING, check(line("回家", 10, 10), line("QQ经典农场", 500, 520)));
     }
     @Test public void anyThreeDistinctMenuWordsWorkAtAnyPosition() {
         String[] words = {"仓库", "商店", "宠物", "图鉴", "装扮", "好友"};
@@ -32,17 +33,24 @@ public class FarmIdentityRecognitionTest {
         }
         assertEquals(20, combinations);
     }
-    @Test public void homeAllowsFriendFarmEvidenceAndRequiresThreeDistinctWords() {
+    @Test public void homeRequiresThreeDistinctWordsWithoutReturnHome() {
         OcrLine warehouse = line("仓库", 100, 930), shop = line("商店", 270, 930), pet = line("宠物", 430, 930);
         assertEquals(FarmIdentityRecognition.Outcome.HOME, check(warehouse, shop, pet));
         assertEquals(FarmIdentityRecognition.Outcome.NO_MATCH, check(warehouse));
         assertEquals(FarmIdentityRecognition.Outcome.NO_MATCH, check(warehouse, shop));
         assertEquals(FarmIdentityRecognition.Outcome.NO_MATCH, check(warehouse, warehouse, line("仓库仓库", 500, 500)));
-        assertEquals(FarmIdentityRecognition.Outcome.HOME, check(warehouse, shop, pet, line("回家", 850, 400)));
-        assertEquals(FarmIdentityRecognition.Outcome.HOME, check(warehouse, shop, pet, line("好友家", 850, 400)));
-        assertEquals(FarmIdentityRecognition.Outcome.NO_MATCH, check(warehouse, shop, line("好友家", 850, 400)));
-        assertEquals(FarmIdentityRecognition.Outcome.HOME, check(warehouse, shop, line("好友家 好友", 850, 400)));
         assertEquals(FarmIdentityRecognition.Outcome.HOME, check(warehouse, shop, line("宠物", 430, 899)));
+    }
+    @Test public void returnHomeAloneOrWithMenuWordsAtAnyPosition() {
+        assertEquals(FarmIdentityRecognition.Outcome.HOME, check(line("回家", 10, 10)));
+        assertEquals(FarmIdentityRecognition.Outcome.HOME, check(line("回 家", 500, 500)));
+        assertEquals(FarmIdentityRecognition.Outcome.HOME, check(line("点击回家", 990, 990)));
+        assertEquals(FarmIdentityRecognition.Outcome.HOME, check(line("回家", 10, 10), line("仓库", 100, 100)));
+        assertEquals(FarmIdentityRecognition.Outcome.HOME, check(line("回家", 10, 10), line("仓库商店", 100, 100)));
+        assertEquals(FarmIdentityRecognition.Outcome.NO_MATCH, check(new OcrLine("回家", -1, 0, 10, 10)));
+        assertEquals(FarmIdentityRecognition.Outcome.NO_MATCH, check(new OcrLine("回家", 999, 999, 1001, 1000)));
+        assertEquals(FarmIdentityRecognition.Outcome.NO_MATCH, check(new OcrLine("回家", 10, 10, 10, 20)));
+        assertEquals(FarmIdentityRecognition.Outcome.NO_MATCH, check(new OcrLine("回家", -1, 0, 10, 10), line("仓库商店", 100, 100)));
     }
     @Test public void observedMergedMenuIsHome() {
         OcrLine warehouse = new OcrLine("仓库", 55, 2628, 176, 2679);
@@ -80,7 +88,6 @@ public class FarmIdentityRecognitionTest {
         OcrLine merged = new OcrLine("商店宠物", 210, 920, 440, 940);
         assertEquals(FarmIdentityRecognition.Outcome.NO_MATCH, check(merged));
         assertEquals(FarmIdentityRecognition.Outcome.HOME, check(warehouse, merged, line("回家", 850, 400)));
-        assertEquals(FarmIdentityRecognition.Outcome.HOME, check(warehouse, merged, line("好友家", 850, 400)));
     }
     @Test public void rejectUnlocatedGeneralWordsAndWrongRegions() {
         assertEquals(FarmIdentityRecognition.Outcome.NO_MATCH, FarmIdentityRecognition.classify(Collections.emptyList(), 1000, 1000));
