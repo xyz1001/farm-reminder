@@ -25,6 +25,7 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+import java.lang.ref.WeakReference;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -35,6 +36,7 @@ import java.util.Locale;
 /** A local-only dashboard. Accessibility monitoring and reminders are independent. */
 public class MainActivity extends Activity {
     private static final int NOTIFICATIONS = 102;
+    private static final int EXPORT_DIAGNOSTICS = 103;
     private static final int INK = 0xFF20382D, GREEN = 0xFF276344;
     private static final int MUTED = 0xFF657367, PAPER = 0xFFF7F6EF;
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -43,6 +45,9 @@ public class MainActivity extends Activity {
     private TextView processedCount, pendingCount, ocrState, queueDetails;
     private TextView foregroundStatus, foregroundError, monitorNotificationHint;
     private Button startButton, stopButton, retryButton, notificationButton, exactButton, clearButton;
+    private Button exportButton;
+    private TextView exportStatus;
+    private ExportState exportState;
     private LinearLayout reminders;
     private SharedPreferences settings;
     private ReminderStore store;
@@ -63,6 +68,14 @@ public class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        Object retained = getLastNonConfigurationInstance();
+        exportState = retained instanceof ExportState ? (ExportState) retained : new ExportState();
+        if (retained == null && state != null) {
+            exportState.picking = state.getBoolean("exportPicking", false);
+            if (state.getBoolean("exportBusy", false))
+                exportState.message = "上次导出结果未确认，请检查保存位置；可重新导出。";
+        }
+        exportState.activity = new WeakReference<>(this);
         settings = getSharedPreferences("settings", MODE_PRIVATE);
         leadSeconds = settings.getInt("leadSeconds", 60);
         if (leadSeconds != 0 && leadSeconds != 60 && leadSeconds != 300) leadSeconds = 60;
@@ -73,6 +86,7 @@ public class MainActivity extends Activity {
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
                 | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
         buildScreen();
+        renderExportState();
         FarmAccessibilityService.refreshDiskProgress(this);
     }
 
@@ -106,7 +120,7 @@ public class MainActivity extends Activity {
         LinearLayout capture = card(page, 24, 0xFFE9EFE5);
         runningLabel = addText(capture, "○  监测未启动", 13, GREEN, true, 0);
         addText(capture, "记录好友农场的成熟时间", 20, INK, true, 12);
-        addText(capture, "可自行选择启用无障碍服务：读取前台窗口线索，通过本地截图识别倒计时。截图暂存应用私有目录，成功处理后删除，失败保留。不上传、不自动点击。", 14, MUTED, false, 9);
+        addText(capture, "可自行选择启用无障碍服务：读取前台窗口线索，通过本地截图识别倒计时。截图与识别结果保存在应用私有目录，不自动删除，仅手动导出。不上传、不自动点击。", 14, MUTED, false, 9);
         addText(capture, "启用服务后，仍需手动开始监测。检测到微信小程序窗口后自动截图识别；离开小程序窗口停止截图，已保存图片继续识别。若尚未检测到窗口，请手动进入小程序；手动停止则保留队列并暂停处理。", 13, MUTED, false, 9);
         captureStatus = addText(capture, "未运行", 13, INK, false, 14);
         foregroundStatus = addText(capture, "前台监测服务 · 未启动", 13, GREEN, true, 8);
@@ -135,6 +149,10 @@ public class MainActivity extends Activity {
             } catch (RuntimeException e) { showFeedback("未能请求重试，请稍后再试。失败图片仍保留。"); }
         });
         retryButton.setVisibility(View.GONE);
+        addText(progress, "识别后的截图也会保留，用于核对；不会自动上传。请复现后停止监测并导出，避免持续占用空间。", 12, MUTED, false, 10);
+        addText(progress, "可先手动离开小程序，等待队列处理完成，再停止监测并导出。诊断包包含截图、识别文字及好友昵称等敏感信息，仅交给可信人员；请选择可信的保存位置。", 12, MUTED, false, 8);
+        exportButton = button(progress, "导出诊断包", false, 10, this::requestDiagnosticsExport);
+        exportStatus = addText(progress, "无需启动监测或启用无障碍服务即可导出已有记录。", 12, MUTED, false, 7);
         startButton = button(capture, "检查无障碍设置", true, 16, this::requestMonitoring);
         stopButton = button(capture, "停止监测", false, 8, () -> {
             try {
@@ -237,6 +255,91 @@ public class MainActivity extends Activity {
         refresh();
     }
 
+    private void requestDiagnosticsExport() {
+        if (exportState.busy || exportState.picking) return;
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("application/zip")
+                .putExtra(Intent.EXTRA_TITLE, "farm-diagnostics-"
+                        + new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date()) + ".zip");
+        exportState.picking = true;
+        renderExportState();
+        try { startActivityForResult(intent, EXPORT_DIAGNOSTICS); }
+        catch (ActivityNotFoundException e) {
+            exportState.picking = false;
+            exportState.message = "此设备不支持选择保存位置，无法导出诊断包。";
+            renderExportState();
+        } catch (RuntimeException e) {
+            exportState.picking = false;
+            exportState.message = "无法打开保存位置选择器，请稍后重试。";
+            renderExportState();
+        }
+    }
+
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != EXPORT_DIAGNOSTICS) return;
+        exportState.picking = false;
+        Uri destination = data == null ? null : data.getData();
+        if (resultCode != RESULT_OK || destination == null) {
+            exportState.message = "已取消导出，已有截图和识别记录仍保留。";
+            renderExportState();
+            return;
+        }
+        exportState.busy = true;
+        exportState.message = "";
+        renderExportState();
+        try {
+            FarmAccessibilityService.exportDiagnostics(getApplicationContext(), destination, exportState);
+        } catch (RuntimeException e) {
+            exportState.onFailure("导出失败");
+        }
+    }
+
+    private void renderExportState() {
+        if (isFinishing() || isDestroyed()) return;
+        exportButton.setEnabled(!exportState.busy && !exportState.picking);
+        exportButton.setText(exportState.busy ? "正在导出…" : "导出诊断包");
+        String message = exportState.busy ? "正在导出，请稍候；不会改变监测状态。"
+                : exportState.picking ? "请选择诊断包的保存位置。"
+                : exportState.message.isEmpty() ? "无需启动监测或启用无障碍服务即可导出已有记录。"
+                : exportState.message;
+        if (FarmAccessibilityService.getOcrProgress().hasUnsavedCapture)
+            message += "\n还有截图未保存，可能不在诊断包内，先重试保存；请勿关闭应用。";
+        exportStatus.setText(message);
+    }
+
+    // Retain only export state across rotation; the worker callback never owns an Activity.
+    private static final class ExportState implements DiagnosticsExportCallback {
+        private WeakReference<MainActivity> activity = new WeakReference<>(null);
+        private boolean busy, picking;
+        private String message = "";
+
+        @Override public void onSuccess(int frameCount) {
+            finish("已导出" + frameCount + "张截图及识别记录"
+                    + (frameCount == 0 ? "（无截图，仅含诊断元数据）" : ""));
+        }
+
+        @Override public void onFailure(String ignored) {
+            finish("导出失败，请检查保存位置和可用空间后重试。未完成的 ZIP 可能不完整，请勿用于核对。");
+        }
+
+        private void finish(String result) {
+            busy = false;
+            message = result;
+            MainActivity current = activity.get();
+            if (current != null) current.renderExportState();
+        }
+    }
+
+    @Override public Object onRetainNonConfigurationInstance() { return exportState; }
+
+    @Override protected void onSaveInstanceState(Bundle state) {
+        state.putBoolean("exportPicking", exportState.picking);
+        state.putBoolean("exportBusy", exportState.busy);
+        super.onSaveInstanceState(state);
+    }
+
     private boolean notificationsAllowed() {
         return (Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
                 == PackageManager.PERMISSION_GRANTED)
@@ -301,6 +404,7 @@ public class MainActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        if (exportState.activity.get() == this) exportState.activity.clear();
         handler.removeCallbacksAndMessages(null);
         super.onDestroy();
     }
@@ -345,18 +449,19 @@ public class MainActivity extends Activity {
         String status = FarmAccessibilityService.lastStatus;
         captureStatus.setText(readiness + "\n监测状态：" + monitorStatusText(status));
         OcrProgress progress = FarmAccessibilityService.getOcrProgress();
+        renderExportState();
         processedCount.setText("已识别 " + progress.processed + " 张");
         pendingCount.setText("待识别 " + progress.queued + " 张");
         ocrState.setText((progress.recognizing ? "正在识别 1 张 · 不计入待识别"
                 : !running ? "监测未启动 · 已保存队列保留，需手动开始"
                 : "暂无正在识别的图片") + "\n" + capturePauseText(progress, running, connected));
         queueDetails.setText(String.format(Locale.CHINA,
-                "失败保留 %d 张 · 待清理 %d 张\n磁盘占用 %.1f MiB%s",
-                progress.failedCount, progress.cleanupPendingCount,
+                "成功归档（已留存）%d 张 · 失败保留 %d 张\n历史缺图/旧清理记录 %d 项 · 占用 %.1f MiB（含截图、OCR 和元数据）%s",
+                progress.archivedCount, progress.failedCount, progress.cleanupPendingCount,
                 progress.retainedBytes / (1024f * 1024f),
                 (progress.writing ? "\n正在保存截图 · 尚未确认可靠落盘，请勿清除应用数据" : "")
                         + (progress.hasUnsavedCapture
-                        ? "\n有1张截图尚未保存，勿关闭应用，可重试保存"
+                         ? "\n还有截图未保存，可能不在诊断包内，先重试保存；请勿关闭应用"
                         : progress.writing ? ""
                         : "WRITE_FAILED".equals(progress.pauseReason)
                         ? "\n可能存在未可靠保存的截图，请检查存储空间后重试" : "")));

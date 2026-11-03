@@ -8,7 +8,7 @@ public final class OcrProgress {
     public final long ttlMs;
     public final boolean durableQueue, writing, capturePaused;
     public final boolean hasUnsavedCapture, retryAvailable;
-    public final int failedCount, cleanupPendingCount;
+    public final int failedCount, cleanupPendingCount, archivedCount;
     public final long retainedBytes;
     public final String pauseReason;
 
@@ -18,7 +18,7 @@ public final class OcrProgress {
         this.queued = queued; this.pendingBytes = pendingBytes; this.recognizing = recognizing;
         this.maxPendingFrames = maxPendingFrames; this.maxPendingBytes = maxPendingBytes; this.ttlMs = ttlMs;
         this.durableQueue = false; this.writing = false; this.capturePaused = false;
-        this.failedCount = 0; this.cleanupPendingCount = 0; this.retainedBytes = 0; this.pauseReason = "NONE";
+        this.failedCount = 0; this.cleanupPendingCount = 0; this.archivedCount = 0; this.retainedBytes = 0; this.pauseReason = "NONE";
         this.hasUnsavedCapture = false; this.retryAvailable = false;
     }
 
@@ -31,10 +31,18 @@ public final class OcrProgress {
     OcrProgress(long processed, long captured, int queued, long pendingBytes, boolean recognizing,
                 int failedCount, int cleanupPendingCount, long retainedBytes, boolean writing, String pauseReason,
                 boolean hasUnsavedCapture) {
+        this(processed, captured, queued, pendingBytes, recognizing, failedCount, cleanupPendingCount,
+                retainedBytes, writing, pauseReason, hasUnsavedCapture, 0);
+    }
+
+    OcrProgress(long processed, long captured, int queued, long pendingBytes, boolean recognizing,
+                int failedCount, int cleanupPendingCount, long retainedBytes, boolean writing, String pauseReason,
+                boolean hasUnsavedCapture, int archivedCount) {
         this.processed = processed; this.captured = captured; this.dropped = 0;
         this.queued = queued; this.pendingBytes = pendingBytes; this.recognizing = recognizing;
         this.maxPendingFrames = -1; this.maxPendingBytes = -1; this.ttlMs = -1;
         this.durableQueue = true; this.failedCount = failedCount; this.cleanupPendingCount = cleanupPendingCount;
+        this.archivedCount = archivedCount;
         this.retainedBytes = retainedBytes; this.writing = writing; this.pauseReason = pauseReason;
         this.capturePaused = !"NONE".equals(pauseReason);
         this.hasUnsavedCapture = hasUnsavedCapture;

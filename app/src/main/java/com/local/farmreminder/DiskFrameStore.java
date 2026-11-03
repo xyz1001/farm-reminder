@@ -22,7 +22,7 @@ import java.util.UUID;
 
 /**
  * Serial-executor-confined durable frame repository. It does not start capture or OCR.
- * All artifacts are retained on uncertain failures; only COMPLETED frames may be removed.
+ * Frames are retained after completion; explicit cleanup is available for legacy callers.
  * The platform adapter must supply a directory fsync implementation.
  */
 final class DiskFrameStore {
@@ -54,7 +54,7 @@ final class DiskFrameStore {
     }
     static final class Snapshot {
         final List<Frame> frames = new ArrayList<>();
-        int failedArtifacts, cleanupPending;
+        int failedArtifacts, cleanupPending, archivedCount;
         long retainedBytes, pendingBytes;
         int pending;
     }
@@ -171,7 +171,9 @@ final class DiskFrameStore {
                 result.frames.add(f); result.retainedBytes += imageBytes(dir);
                 if (recoveryRequired.contains(f.id)) result.failedArtifacts++;
                 if (f.state == State.PENDING) { result.pending++; result.pendingBytes += f.imageBytes; }
-                if (f.state == State.COMPLETED) result.cleanupPending++;
+                if (f.state == State.COMPLETED) {
+                    if (hasImage(dir, f)) result.archivedCount++; else result.cleanupPending++;
+                }
             } catch (IOException | RuntimeException e) {
                 result.failedArtifacts++; result.retainedBytes += imageBytes(dir);
             }
@@ -194,6 +196,21 @@ final class DiskFrameStore {
     }
 
     File image(Frame f) { return new File(directory(f), "image.png"); }
+
+    File root() { return root; }
+
+    void writeDiagnostic(Frame f, String name, byte[] bytes) throws IOException {
+        if (!(name.equals("ocr-lines.tsv") || name.equals("result.properties"))) throw new IOException("invalid diagnostic name");
+        File dir = directory(f);
+        Frame current = readFrame(dir);
+        if (current.state != State.PROCESSING || !sameCapture(f, current)) throw new IOException("invalid diagnostic frame");
+        File tmp = new File(dir, name + "-" + UUID.randomUUID() + ".tmp");
+        try (FileOutputStream out = new FileOutputStream(tmp)) {
+            out.write(bytes); out.flush(); out.getFD().sync();
+        }
+        ops.replace(tmp, new File(dir, name));
+        sync.sync(dir);
+    }
 
     /** Reconcile an uncertain publication without disturbing an active OCR claim. */
     boolean reconcilePublication(Frame f) throws IOException {

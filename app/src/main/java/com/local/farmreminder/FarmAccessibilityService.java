@@ -103,6 +103,9 @@ public class FarmAccessibilityService extends AccessibilityService {
     }
     public static void refreshDiskProgress(Context context) { engine(context).refresh(); }
     public static void retryFailedFrames(Context context) { engine(context).retryFailed(); }
+    public static void exportDiagnostics(Context context, android.net.Uri destination, DiagnosticsExportCallback callback) {
+        engine(context).exportDiagnostics(destination, callback);
+    }
     public static boolean isEnabled(Context context) {
         AccessibilityManager manager = (AccessibilityManager) context.getSystemService(Context.ACCESSIBILITY_SERVICE);
         if (manager == null) return false;
