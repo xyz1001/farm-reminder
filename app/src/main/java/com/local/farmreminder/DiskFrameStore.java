@@ -1,6 +1,7 @@
 package com.local.farmreminder;
 
 import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -46,10 +47,10 @@ final class DiskFrameStore {
 
     enum State { PENDING, PROCESSING, FAILED, COMPLETED }
     static final class Frame {
-        String id, sessionId, captureMethod, digest, failureCode = "";
+        String id, sessionId, captureMethod, digest, failureCode = "", imageFileName = "image.png";
         long enqueueSequence, captureSequence, captureWallMs, captureUptimeMs, imageBytes;
         int windowId, width, height, attempts;
-        boolean contextCertain = true;
+        boolean contextCertain = true, imageHasAlpha = true;
         State state = State.PENDING;
     }
     static final class Snapshot {
@@ -88,7 +89,7 @@ final class DiskFrameStore {
     }
 
     Frame publish(Frame f, ImageWriter writer) throws IOException {
-        if (f.sessionId == null || f.captureMethod == null || f.width <= 0 || f.height <= 0)
+        if (f.sessionId == null || f.captureMethod == null || f.width <= 0 || f.height <= 0 || !validImageName(f.imageFileName))
             throw new IOException("invalid capture metadata");
         if (f.id != null && reconcilePublication(f)) return f;
         f.id = UUID.randomUUID().toString();
@@ -108,7 +109,8 @@ final class DiskFrameStore {
         File tmp = new File(staging, "image.tmp");
         MessageDigest digest = sha256();
         try (FileOutputStream raw = new FileOutputStream(tmp);
-             DigestOutputStream output = new DigestOutputStream(raw, digest)) {
+             DigestOutputStream hashed = new DigestOutputStream(raw, digest);
+             BufferedOutputStream output = new BufferedOutputStream(hashed, 64 * 1024)) {
             if (!writer.write(output)) throw new IOException("image encoding failed");
             output.flush();
             raw.getFD().sync();
@@ -116,7 +118,7 @@ final class DiskFrameStore {
         f.imageBytes = tmp.length();
         if (f.imageBytes <= 0) throw new IOException("empty image");
         f.digest = hex(digest.digest());
-        ops.move(tmp, new File(staging, "image.png"));
+        ops.move(tmp, new File(staging, f.imageFileName));
         sync.sync(staging);
         writeManifest(staging, f, false);
         File published = new File(root, f.id);
@@ -195,7 +197,10 @@ final class DiskFrameStore {
         return null;
     }
 
-    File image(Frame f) { return new File(directory(f), "image.png"); }
+    File image(Frame f) {
+        if (!validImageName(f.imageFileName)) throw new IllegalArgumentException("invalid image name");
+        return new File(directory(f), f.imageFileName);
+    }
 
     File root() { return root; }
 
@@ -246,7 +251,7 @@ final class DiskFrameStore {
     private boolean publishStaging(File dir, Frame f) throws IOException {
         File manifest = new File(dir, "manifest.properties");
         if (!manifest.exists()) {
-            File image = new File(dir, "image.png");
+            File image = new File(dir, f.imageFileName);
             if (!image.isFile() || image.length() <= 0 || f.state != State.PENDING) return false;
             f.imageBytes = image.length();
             f.digest = digestReader.digest(image);
@@ -263,7 +268,8 @@ final class DiskFrameStore {
                 && java.util.Objects.equals(a.captureMethod, b.captureMethod)
                 && a.captureSequence == b.captureSequence && a.captureWallMs == b.captureWallMs
                 && a.captureUptimeMs == b.captureUptimeMs && a.windowId == b.windowId
-                && a.width == b.width && a.height == b.height && a.contextCertain == b.contextCertain;
+                && a.width == b.width && a.height == b.height && a.contextCertain == b.contextCertain
+                && java.util.Objects.equals(a.imageFileName, b.imageFileName) && a.imageHasAlpha == b.imageHasAlpha;
     }
 
     void fail(Frame f, String code) throws IOException {
@@ -325,7 +331,7 @@ final class DiskFrameStore {
     private static boolean isCleanupFile(File file) {
         String name = file.getName();
         if (!file.isFile()) return false;
-        if (name.equals("image.png") || name.equals("initial.properties") || name.equals("manifest.properties")) return true;
+        if (validImageName(name) || name.equals("initial.properties") || name.equals("manifest.properties")) return true;
         if (!name.startsWith("manifest-") || !name.endsWith(".tmp")) return false;
         try {
             String id = name.substring("manifest-".length(), name.length() - ".tmp".length());
@@ -370,6 +376,7 @@ final class DiskFrameStore {
         p.setProperty("imageBytes", Long.toString(f.imageBytes)); p.setProperty("digest", f.digest == null ? "" : f.digest);
         p.setProperty("state", f.state.name()); p.setProperty("attempts", Integer.toString(f.attempts));
         p.setProperty("contextCertain", Boolean.toString(f.contextCertain));
+        p.setProperty("imageFileName", f.imageFileName); p.setProperty("imageHasAlpha", Boolean.toString(f.imageHasAlpha));
         p.setProperty("failureCode", f.failureCode); return p;
     }
     private static Frame readFrame(File dir) throws IOException {
@@ -392,18 +399,24 @@ final class DiskFrameStore {
             String contextCertain = p.getProperty("contextCertain", "true");
             if (!contextCertain.equals("true") && !contextCertain.equals("false")) throw new IOException("invalid context certainty");
             f.contextCertain = Boolean.parseBoolean(contextCertain);
+            f.imageFileName = p.getProperty("imageFileName", "image.png");
+            if (!validImageName(f.imageFileName)) throw new IOException("invalid image name");
+            String alpha = p.getProperty("imageHasAlpha", "true");
+            if (!alpha.equals("true") && !alpha.equals("false")) throw new IOException("invalid image alpha");
+            f.imageHasAlpha = Boolean.parseBoolean(alpha);
             if (f.enqueueSequence <= 0 || f.captureSequence <= 0 || f.width <= 0 || f.height <= 0 || f.captureMethod == null) throw new IOException("invalid metadata");
             return f;
         } catch (IllegalArgumentException | NullPointerException e) { throw new IOException("invalid metadata", e); }
     }
     private static boolean hasImage(File dir, Frame f) {
-        File image = new File(dir, "image.png");
+        File image = new File(dir, f.imageFileName);
         return image.isFile() && image.length() == f.imageBytes && f.imageBytes > 0
                 && f.digest != null && f.digest.matches("[0-9a-f]{64}");
     }
     private boolean validImage(File dir, Frame f) throws IOException {
-        return hasImage(dir, f) && digestReader.digest(new File(dir, "image.png")).equals(f.digest);
+        return hasImage(dir, f) && digestReader.digest(new File(dir, f.imageFileName)).equals(f.digest);
     }
+    private static boolean validImageName(String name) { return "image.png".equals(name) || "image.webp".equals(name); }
     private static String digestImage(File image) throws IOException {
         MessageDigest digest = sha256();
         try (DigestInputStream in = new DigestInputStream(new BufferedInputStream(new FileInputStream(image)), digest)) {

@@ -127,4 +127,20 @@ public class DiagnosticsArchiveTest {
         assertFalse(zip.containsKey("frames/" + f.id + "/result.properties"));
         assertTrue(new String(zip.get("summary.properties"), StandardCharsets.ISO_8859_1).contains("incompleteCount=1"));
     }
+    @Test public void webpExportPreservesBytesAndExcludesUnlistedFiles() throws Exception {
+        File root = temp.newFolder(); DiskFrameStore store = open(root);
+        DiskFrameStore.Frame f = new DiskFrameStore.Frame(); f.sessionId = UUID.randomUUID().toString();
+        f.captureSequence = 1; f.captureMethod = "window"; f.width = 100; f.height = 200;
+        f.imageFileName = "image.webp"; f.imageHasAlpha = false; byte[] bytes = {10,20,30,40};
+        store.publish(f, out -> { out.write(bytes); return true; });
+        Files.write(new File(root, f.id + "/unfinished.tmp").toPath(), new byte[]{99});
+        Files.write(new File(root, "outside.txt").toPath(), new byte[]{88});
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        DiagnosticsExporter.export(store, store.scan(), out, "test", false);
+        Map<String, byte[]> zip = unzip(out.toByteArray());
+        assertArrayEquals(bytes, zip.get("frames/" + f.id + "/image.webp"));
+        assertFalse(zip.containsKey("frames/" + f.id + "/image.png"));
+        assertFalse(zip.containsKey("frames/" + f.id + "/unfinished.tmp"));
+        assertFalse(zip.containsKey("outside.txt"));
+    }
 }

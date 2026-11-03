@@ -304,4 +304,58 @@ public class DiskFrameStoreTest {
         store.publish(f, out -> { fail("must adopt existing image"); return false; });
         assertEquals(id, f.id); assertEquals(sequence, f.enqueueSequence); assertEquals(1, store.scan().pending);
     }
+    @Test public void webpMetadataAndHashSurviveReopenForBothAlphaValues() throws Exception {
+        File root = temporary.newFolder(); DiskFrameStore store = open(root);
+        for (int i = 1; i <= 2; i++) {
+            DiskFrameStore.Frame f = frame(i); f.imageFileName = "image.webp"; f.imageHasAlpha = i == 1;
+            store.publish(f, out -> { out.write(new byte[]{1,2,3,4}); return true; });
+        }
+        store = open(root); store.recover();
+        for (int i = 1; i <= 2; i++) {
+            DiskFrameStore.Frame claim = store.claimNext(); assertNotNull(claim);
+            assertEquals("image.webp", claim.imageFileName); assertEquals(i == 1, claim.imageHasAlpha);
+            assertArrayEquals(new byte[]{1,2,3,4}, Files.readAllBytes(store.image(claim).toPath()));
+            store.acknowledge(claim);
+        }
+    }
+    @Test public void oldPngMetadataDefaultsOnReopen() throws Exception {
+        File root = temporary.newFolder(); DiskFrameStore store = open(root); DiskFrameStore.Frame f = publish(store, 1);
+        for (String name : new String[]{"initial.properties", "manifest.properties"}) {
+            File file = new File(root, f.id + "/" + name); java.util.Properties p = new java.util.Properties();
+            try (java.io.FileInputStream in = new java.io.FileInputStream(file)) { p.load(in); }
+            p.remove("imageFileName"); p.remove("imageHasAlpha");
+            try (java.io.FileOutputStream out = new java.io.FileOutputStream(file)) { p.store(out, null); }
+        }
+        store = open(root); store.recover(); DiskFrameStore.Frame claim = store.claimNext();
+        assertNotNull(claim); assertEquals("image.png", claim.imageFileName); assertTrue(claim.imageHasAlpha);
+    }
+    @Test public void webpCompleteStageReconcilesSameIdAfterFailure() throws Exception {
+        File root = temporary.newFolder(); final boolean[] failManifest = {true};
+        DiskFrameStore.FileOps ops = new DiskFrameStore.FileOps() {
+            public void move(File a, File b) throws IOException {
+                if (b.getName().equals("manifest.properties") && failManifest[0]) { failManifest[0] = false; throw new IOException("injected"); }
+                DiskFrameStore.DEFAULT_OPS.move(a,b);
+            }
+            public void replace(File a, File b) throws IOException { DiskFrameStore.DEFAULT_OPS.replace(a,b); }
+            public boolean delete(File f) { return DiskFrameStore.DEFAULT_OPS.delete(f); }
+        };
+        DiskFrameStore store = new DiskFrameStore(root, NOOP_SYNC, ops); DiskFrameStore.Frame f = frame(1);
+        f.imageFileName = "image.webp"; f.imageHasAlpha = false;
+        try { store.publish(f, out -> { out.write(42); return true; }); fail(); } catch (IOException expected) { }
+        String id = f.id; store = open(root); assertTrue(store.reconcilePublication(f));
+        store.publish(f, out -> { fail("must not rewrite"); return false; });
+        DiskFrameStore.Frame claim = store.claimNext(); assertEquals(id, claim.id); assertFalse(claim.imageHasAlpha);
+        assertEquals("image.webp", store.image(claim).getName());
+    }
+    @Test public void unsafeImageNameRejectedOnWriteAndRead() throws Exception {
+        File root = temporary.newFolder(); DiskFrameStore store = open(root); DiskFrameStore.Frame bad = frame(1);
+        bad.imageFileName = "../image.webp";
+        try { store.publish(bad, out -> true); fail(); } catch (IOException expected) { }
+        DiskFrameStore.Frame f = publish(store, 2); File manifest = new File(root, f.id + "/manifest.properties");
+        java.util.Properties p = new java.util.Properties();
+        try (java.io.FileInputStream in = new java.io.FileInputStream(manifest)) { p.load(in); }
+        p.setProperty("imageFileName", "../image.webp");
+        try (java.io.FileOutputStream out = new java.io.FileOutputStream(manifest)) { p.store(out, null); }
+        assertEquals(1, open(root).scan().failedArtifacts); assertNull(open(root).claimNext());
+    }
 }

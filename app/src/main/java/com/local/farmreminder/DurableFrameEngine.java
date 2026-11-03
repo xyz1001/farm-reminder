@@ -5,6 +5,7 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Rect;
 import android.os.Handler;
+import android.os.Build;
 import android.os.Looper;
 import android.os.StatFs;
 import android.net.Uri;
@@ -144,7 +145,9 @@ public final class DurableFrameEngine {
         if (image == null || metadata == null) throw new IllegalArgumentException("missing capture");
         synchronized (captureLock) {
             if (unsaved != null) throw new IllegalStateException("capture slot occupied; ownership not transferred");
-            unsaved = image; unsavedMetadata = copyMetadata(metadata); writing = true;
+            unsaved = image; unsavedMetadata = copyMetadata(metadata);
+            unsavedMetadata.imageFileName = ImageEncodingPolicy.fileName(Build.VERSION.SDK_INT);
+            unsavedMetadata.imageHasAlpha = image.hasAlpha(); writing = true;
         }
         disk.execute(() -> { update(); writeCapture(); });
     }
@@ -152,7 +155,8 @@ public final class DurableFrameEngine {
         DiskFrameStore.Frame c = new DiskFrameStore.Frame();
         c.sessionId = f.sessionId; c.captureMethod = f.captureMethod; c.captureSequence = f.captureSequence;
         c.captureWallMs = f.captureWallMs; c.captureUptimeMs = f.captureUptimeMs; c.windowId = f.windowId;
-        c.width = f.width; c.height = f.height; c.contextCertain = f.contextCertain; return c;
+        c.width = f.width; c.height = f.height; c.contextCertain = f.contextCertain;
+        c.imageFileName = f.imageFileName; c.imageHasAlpha = f.imageHasAlpha; return c;
     }
     private void writeCapture() {
         Bitmap bitmap; DiskFrameStore.Frame frame;
@@ -160,7 +164,9 @@ public final class DurableFrameEngine {
         if (bitmap == null) return;
         try {
             if (store == null) throw new IOException("store unavailable");
-            if (!store.reconcilePublication(frame)) store.publish(frame, out -> bitmap.compress(Bitmap.CompressFormat.PNG, 100, out));
+            if (!store.reconcilePublication(frame)) store.publish(frame, out -> bitmap.compress(
+                    Build.VERSION.SDK_INT >= 30 && "image.webp".equals(frame.imageFileName) ? Bitmap.CompressFormat.WEBP_LOSSLESS : Bitmap.CompressFormat.PNG,
+                    ImageEncodingPolicy.quality(Build.VERSION.SDK_INT), out));
             synchronized (captureLock) { unsaved = null; unsavedMetadata = null; writing = false; writeFailed = false; }
             bitmap.recycle(); captured++;
         } catch (Exception e) { writing = false; writeFailed = true; }
@@ -225,7 +231,7 @@ public final class DurableFrameEngine {
             if (frame == null) { finishFrame(); return; }
             if (!fence.valid(token)) { returnPending(frame); finishFrame(); return; }
         } catch (Exception e) { storageError(token); finishFrame(); return; }
-        final Bitmap bitmap = decode(store.image(frame));
+        final Bitmap bitmap = decode(store.image(frame), frame.imageHasAlpha);
         if (bitmap == null) { fail(frame, "DECODE_FAILED", token, false); finishFrame(); return; }
         if (!fence.beginModel(token)) { bitmap.recycle(); returnPending(frame); finishFrame(); return; }
         Runnable watchdog = () -> {
@@ -260,8 +266,8 @@ public final class DurableFrameEngine {
         });
         update();
     }
-    private static Bitmap decode(File file) {
-        try { return BitmapFactory.decodeFile(file.getAbsolutePath()); }
+    private static Bitmap decode(File file, boolean hasAlpha) {
+        try { Bitmap bitmap = BitmapFactory.decodeFile(file.getAbsolutePath()); if (bitmap != null) bitmap.setHasAlpha(hasAlpha); return bitmap; }
         catch (RuntimeException e) { return null; }
     }
     private static List<OcrLine> lines(Text text, boolean includeUnlocated) {

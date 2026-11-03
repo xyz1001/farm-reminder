@@ -17,7 +17,7 @@ import java.util.zip.ZipOutputStream;
 
 /** Exports only known frame artifacts, from one disk-executor snapshot. */
 final class DiagnosticsExporter {
-    private static final String[] FILES = {"image.png", "initial.properties", "manifest.properties", "ocr-lines.tsv", "result.properties"};
+    private static final String[] FILES = {"image.png", "image.webp", "initial.properties", "manifest.properties", "ocr-lines.tsv", "result.properties"};
 
     static int export(DiskFrameStore store, DiskFrameStore.Snapshot snapshot, OutputStream output,
                       String version, boolean unsaved) throws IOException {
