@@ -4,6 +4,25 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class ContainerCapturePolicyTest {
+    @Test public void modeControlsDeadlineWithoutChangingForegroundAdmission() {
+        ContainerCapturePolicy p = new ContainerCapturePolicy();
+        p.enter("shizuku", 1, 0, true);
+        assertTrue(p.allows(21000)); assertFalse(p.expire(21000));
+        assertTrue(p.recognize("shizuku", 1, true, 21000));
+        assertNull(ForegroundSourcePolicy.key(true, null, true, false, true, true, true, false, "task", "component"));
+        assertNull(ForegroundSourcePolicy.key(true, null, false, true, true, true, true, false, "task", "component"));
+        p.enter("usage", 1, 0, false);
+        assertFalse(p.allows(21000)); assertTrue(p.timedOut());
+        assertFalse(p.recognize("usage", 1, true, 21001));
+    }
+    @Test public void announcementSurvivesUnknownButResetsOnConfirmedDepartureOrStop() {
+        CaptureAnnouncementPolicy p = new CaptureAnnouncementPolicy();
+        assertTrue(p.onAcceptedFrame());
+        // UNKNOWN and stale snapshots do not call confirmedDeparture.
+        assertFalse(p.onAcceptedFrame());
+        p.confirmedDeparture(); assertTrue(p.onAcceptedFrame());
+        assertFalse(p.onAcceptedFrame()); p.reset(); assertTrue(p.onAcceptedFrame());
+    }
     @Test public void deadlineIsInclusiveAndOnlyExpiresOnce() {
         ContainerCapturePolicy p = new ContainerCapturePolicy(); p.enter("a", 1, 100);
         assertTrue(p.allows(20099)); assertTrue(p.expire(20100));
