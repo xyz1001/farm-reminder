@@ -48,7 +48,8 @@ public class FarmAccessibilityService extends AccessibilityService {
     private Runnable deadlineCallback;
     private String foregroundKey, candidateClass;
     private final java.util.Set<Long> acceptedSequences = new java.util.HashSet<>();
-    private boolean foreground, destroyed, receiverRegistered;
+    private boolean foreground, destroyed, receiverRegistered, shizukuMode;
+    private ShizukuTaskGate.Snapshot shizukuSnapshot;
     private boolean usagePermission, screenInteractive, screenLocked = true, userUnlocked;
     private String captureSession = UUID.randomUUID().toString(), reason = "等待启动";
     private long captureSequence, runEpoch, nextCaptureAllowed, screenshots, errors;
@@ -83,7 +84,7 @@ public class FarmAccessibilityService extends AccessibilityService {
                 if (outcome.added) { added++; MonitorFeedback.added(FarmAccessibilityService.this); }
             }
             reason = containerPolicy.timedOut() ? "CAPTURE_NO_MATCH_TIMEOUT：观察窗未识别到成熟倒计时，已暂停截图"
-                    : !foreground ? "等待微信容器，停止截图，旧图继续识别"
+                    : !foreground ? (shizukuMode ? "等待 Shizuku 前台任务，停止截图，旧图继续识别" : "等待微信容器，停止截图，旧图继续识别")
                     : outcome.code == null ? "处理完成" : "处理完成: " + outcome.code;
             lastStatus = reason; publish(); schedule();
         }
@@ -175,15 +176,17 @@ public class FarmAccessibilityService extends AccessibilityService {
         if (capture.captureBusy()) { lastStatus = CAPTURE_BLOCKED; reason = lastStatus; publish(); return; }
         DurableFrameEngine e = engine(this);
         if (!e.start(listener)) { lastStatus = "识别任务未结束，请等待完成后重试"; reason = lastStatus; publish(); return; }
-        runEpoch = e.epoch(); isRunning = true;
+        runEpoch = e.epoch(); shizukuMode = ShizukuTaskGate.isEnabled(this); isRunning = true;
+        if (shizukuMode) ShizukuTaskGate.get(this).start();
         MonitorFeedback.setSessionActive(this, true);
         getSharedPreferences("settings", MODE_PRIVATE).edit().putBoolean("monitoringEnabled", true).apply();
         newCaptureSession(); foreground = false; policy.invalidate();
-        reason = "等待微信前台推断"; lastStatus = reason; updateForeground(); publish(); schedule();
+        reason = shizukuMode ? "等待 Shizuku 前台任务" : "等待微信前台推断"; lastStatus = reason; updateForeground(); publish(); schedule();
     }
     private void stopSession(boolean stopEngine) {
         if (!alive()) return;
         if (stopEngine && engine != null && isRunning && engine.epoch() == runEpoch) engine.stop();
+        if (shizukuMode) ShizukuTaskGate.get(this).stop();
         isRunning = false; handler.removeCallbacks(sample); cancelDeadline(); containerPolicy.clear(); foregroundKey = null; candidateClass = null; policy.invalidate();
         leaveScene(); foreground = false; newCaptureSession();
         MonitorFeedback.setSessionActive(this, false);
@@ -202,16 +205,21 @@ public class FarmAccessibilityService extends AccessibilityService {
         return super.onUnbind(intent);
     }
     private void newCaptureSession() { captureSession = UUID.randomUUID().toString(); captureSequence = 0; acceptedSequences.clear(); }
-    private UsageForegroundPolicy.Candidate inferForeground() {
+    private void readDeviceState() {
         usagePermission = false; screenInteractive = false; screenLocked = true; userUnlocked = false;
         try {
-            usagePermission = UsageAccessGate.hasPermission(this);
             UserManager user = (UserManager) getSystemService(USER_SERVICE);
             PowerManager power = (PowerManager) getSystemService(POWER_SERVICE);
             KeyguardManager keyguard = (KeyguardManager) getSystemService(KEYGUARD_SERVICE);
             userUnlocked = user != null && user.isUserUnlocked();
             screenInteractive = power != null && power.isInteractive();
             screenLocked = keyguard == null || keyguard.isKeyguardLocked();
+        } catch (RuntimeException ignored) { }
+    }
+    private UsageForegroundPolicy.Candidate inferForeground() {
+        readDeviceState();
+        try {
+            usagePermission = UsageAccessGate.hasPermission(this);
             if (!usagePermission || !userUnlocked || !screenInteractive || screenLocked) return null;
             UsageStatsManager manager = (UsageStatsManager) getSystemService(USAGE_STATS_SERVICE);
             if (manager == null) return null;
@@ -236,20 +244,40 @@ public class FarmAccessibilityService extends AccessibilityService {
     }
     private boolean updateForeground() {
         if (!alive()) return false;
-        UsageForegroundPolicy.Candidate candidate = isRunning ? inferForeground() : null;
-        String key = candidate == null ? null : candidate.key();
-        boolean now = candidate != null;
+        if (isRunning && shizukuMode != ShizukuTaskGate.isEnabled(this)) {
+            stopSession(true); reason = "前台来源已更改，监测已停止，请重新启动"; lastStatus = reason; publish(); return false;
+        }
+        UsageForegroundPolicy.Candidate candidate = null;
+        String key = null, className = null;
+        if (isRunning && shizukuMode) {
+            readDeviceState();
+            ShizukuTaskGate gate = ShizukuTaskGate.get(this);
+            shizukuSnapshot = gate.snapshot();
+            key = ForegroundSourcePolicy.key(true, null, shizukuSnapshot.match,
+                    shizukuSnapshot.age <= 1500, gate.hasPermission(), userUnlocked, screenInteractive,
+                    screenLocked, shizukuSnapshot.key, shizukuSnapshot.component);
+            if (key != null) className = shizukuSnapshot.component;
+        } else if (isRunning) {
+            shizukuSnapshot = null;
+            candidate = inferForeground();
+            key = ForegroundSourcePolicy.key(false, candidate == null ? null : candidate.key(), false,
+                    false, usagePermission, userUnlocked, screenInteractive, screenLocked, null, null);
+            if (key != null) className = candidate.className;
+        }
+        boolean now = key != null;
         if (!java.util.Objects.equals(foregroundKey, key)) {
             if (foreground) leaveScene();
             cancelDeadline(); containerPolicy.clear();
             newCaptureSession(); policy.invalidate();
-            foreground = now; foregroundKey = key; candidateClass = now ? candidate.className : null;
+            foreground = now; foregroundKey = key; candidateClass = className;
             if (now) {
                 sceneEnters++; MonitorFeedback.entered(this);
                 containerPolicy.enter(captureSession, runEpoch, SystemClock.elapsedRealtime());
                 armDeadline(captureSession, runEpoch);
             }
-            reason = now ? "微信小程序容器观察中" : "等待微信容器或使用情况权限，停止截图，旧图继续识别";
+            reason = now ? "微信小程序容器观察中" : shizukuMode
+                    ? "等待 Shizuku 前台任务，停止截图，旧图继续识别"
+                    : "等待微信容器或使用情况权限，停止截图，旧图继续识别";
             lastStatus = reason; publish();
         }
         return now;
@@ -298,6 +326,7 @@ public class FarmAccessibilityService extends AccessibilityService {
         long request = capture.beginCapture(uptime);
         if (request == 0) return;
         String session = captureSession; long sequence = ++captureSequence;
+        if (!currentCapture(session, request)) { capture.endCapture(request); schedule(); return; }
         policy.captured(now); armWatchdog(request, uptime);
         try {
             if (Build.VERSION.SDK_INT >= 30) takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, callback(session, sequence, request, uptime, wall));
@@ -319,8 +348,9 @@ public class FarmAccessibilityService extends AccessibilityService {
                     copy = hardware.copy(Bitmap.Config.ARGB_8888, false);
                     if (copy == null) throw new IllegalStateException("copy failed");
                     DiskFrameStore.Frame frame = new DiskFrameStore.Frame();
-                    frame.sessionId = session; frame.captureSequence = sequence; frame.windowId = -1; frame.captureMethod = "accessibility_display_usage";
-                    frame.contextCertain = true; // Usage-history inference only, not exclusive visibility.
+                    frame.sessionId = session; frame.captureSequence = sequence; frame.windowId = -1;
+                    frame.captureMethod = shizukuMode ? "accessibility_display_shizuku" : "accessibility_display_usage";
+                    frame.contextCertain = true; // Foreground inference is not exclusive visibility.
                     frame.captureUptimeMs = FramePipeline.captureUptime(result.getTimestamp(), requestUptime, now);
                     frame.captureWallMs = FramePipeline.captureWall(result.getTimestamp(), requestUptime, requestWall, now, wall);
                     frame.width = copy.getWidth(); frame.height = copy.getHeight();
@@ -375,7 +405,11 @@ public class FarmAccessibilityService extends AccessibilityService {
         diagnostics = "截图 " + screenshots + " · 磁盘待识别 " + p.queued + " · 失败 " + p.failedCount
                 + " · 待清理 " + p.cleanupPendingCount + " · 保留 " + p.retainedBytes + "B · 写入 " + p.writing
                 + " · 暂停原因 " + p.pauseReason + " · OCR " + p.recognizing + " · 截图错误 " + errors
-                + "\n使用情况权限 " + usagePermission + " · 用户解锁 " + userUnlocked
+                + "\n来源 " + (shizukuMode ? "Shizuku" : "Usage")
+                + (shizukuMode ? " · Shizuku " + ShizukuTaskGate.get(this).status()
+                    + " · 快照年龄ms " + (shizukuSnapshot == null ? "无" : shizukuSnapshot.age)
+                    + " · 快照原因 " + (shizukuSnapshot == null ? "无" : shizukuSnapshot.reason) : "")
+                + " · 使用情况权限 " + usagePermission + " · 用户解锁 " + userUnlocked
                 + " · 屏幕开启 " + screenInteractive + " · 锁屏 " + screenLocked
                 + " · 推断微信前台 " + foreground + " · 进入/退出 " + sceneEnters + "/" + sceneExits
                 + " · 容器 " + (candidateClass == null ? "无" : candidateClass)
@@ -387,6 +421,10 @@ public class FarmAccessibilityService extends AccessibilityService {
                 + " captureTimeout=" + capture.captureTimedOut() + " diskQueued=" + p.queued + " failed=" + p.failedCount
                 + " cleanup=" + p.cleanupPendingCount + " retained=" + p.retainedBytes + " writing=" + p.writing
                 + " pauseReason=" + p.pauseReason + " recognizing=" + p.recognizing + " errors=" + errors
+                + " source=" + (shizukuMode ? "shizuku" : "usage")
+                + (shizukuMode ? " shizukuStatus=" + ShizukuTaskGate.get(this).status()
+                    + " snapshotAge=" + (shizukuSnapshot == null ? "none" : shizukuSnapshot.age)
+                    + " snapshotReason=" + (shizukuSnapshot == null ? "none" : shizukuSnapshot.reason) : "")
                 + " usagePermission=" + usagePermission + " screenInteractive=" + screenInteractive
                 + " screenLocked=" + screenLocked + " userUnlocked=" + userUnlocked;
     }

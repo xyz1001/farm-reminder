@@ -22,6 +22,8 @@ import android.view.View;
 import android.view.WindowInsets;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -45,6 +47,11 @@ public class MainActivity extends Activity {
     private TextView processedCount, pendingCount, ocrState, queueDetails;
     private TextView foregroundStatus, foregroundError, monitorNotificationHint;
     private TextView usageAccessStatus;
+    private TextView modeHint, modeDescription, shizukuStatus;
+    private RadioGroup modeChoices;
+    private RadioButton usageMode, shizukuMode;
+    private Button usageSettingsButton, shizukuPermissionButton;
+    private boolean updatingMode;
     private Button startButton, stopButton, retryButton, notificationButton, exactButton, clearButton;
     private Button exportButton;
     private TextView exportStatus;
@@ -78,6 +85,11 @@ public class MainActivity extends Activity {
         }
         exportState.activity = new WeakReference<>(this);
         settings = getSharedPreferences("settings", MODE_PRIVATE);
+        if (state != null) {
+            foregroundStartupPending = state.getBoolean("foregroundStartupPending", false);
+            foregroundStartupDeadline = state.getLong("foregroundStartupDeadline", 0);
+            foregroundErrorBeforeStart = state.getString("foregroundErrorBeforeStart", "");
+        }
         leadSeconds = settings.getInt("leadSeconds", 60);
         if (leadSeconds != 0 && leadSeconds != 60 && leadSeconds != 300) leadSeconds = 60;
         store = new ReminderStore(this);
@@ -121,8 +133,36 @@ public class MainActivity extends Activity {
         LinearLayout capture = card(page, 24, 0xFFE9EFE5);
         runningLabel = addText(capture, "○  监测未启动", 13, GREEN, true, 0);
         addText(capture, "记录好友农场的成熟时间", 20, INK, true, 12);
-        addText(capture, "需自行开启使用情况访问权限和仅用于截图的无障碍服务，不读取节点树或监听界面事件。截图与识别结果保存在应用私有目录，不自动删除，仅手动导出，不自动上传。", 14, MUTED, false, 9);
-        addText(capture, "检测到微信小程序容器后，以 500 毫秒为目标间隔截取整屏。每次进入只观察首20秒：期间识别到有效成熟倒计时（包括已有提醒）即可继续截图，不要求读到昵称；之后不会因暂时无结果而暂停。首20秒始终无结果则暂停本次停留的新增截图，已保存图片继续识别。离开后重新进入、上下文变化或手动停止再开始可重试；迟到识别不会自动恢复已超时的截图。缺权限、锁屏或状态未知时仍暂停，手动停止也暂停队列处理。\n这不是农场身份核验，也可能截到其他小游戏；成熟词不证明游戏身份。请先关闭敏感页面，再手动进入农场。使用记录和识别可能延迟，切换或覆盖可能截到其他应用或系统内容，多窗口不可靠，不保证消除风控。", 13, MUTED, false, 9);
+        addText(capture, "两种模式均需自行启用仅用于截图的无障碍服务，不读取节点树、窗口列表或监听界面事件。截图与识别结果保存在应用私有目录，不自动删除，仅手动导出，不自动上传。", 14, MUTED, false, 9);
+        addText(capture, "前台判断模式", 14, INK, true, 16);
+        modeChoices = new RadioGroup(this);
+        modeChoices.setOrientation(RadioGroup.VERTICAL);
+        // Preferences own this selection; restoring generated view IDs must not change the mode.
+        modeChoices.setSaveEnabled(false);
+        capture.addView(modeChoices, spaced(-1, -2, 5));
+        usageMode = modeChoice("使用情况模式（默认）");
+        shizukuMode = modeChoice("Shizuku 系统任务模式");
+        modeChoices.check(ShizukuTaskGate.isEnabled(this) ? shizukuMode.getId() : usageMode.getId());
+        modeChoices.setOnCheckedChangeListener((group, checkedId) -> {
+            if (updatingMode) return;
+            if (!canChangeMode()) {
+                showFeedback("请先停止监测，待前台服务停止后再切换模式。");
+                refresh();
+                return;
+            }
+            settings.edit().putBoolean("useShizuku", checkedId == shizukuMode.getId()).apply();
+            showFeedback("模式已保存；不会自动授权或启动监测，请检查权限后手动开始。");
+            refresh();
+        });
+        modeHint = addText(capture, "仅停止监测后可切换模式。", 12, MUTED, false, 5);
+        modeDescription = addText(capture, "", 13, MUTED, false, 9);
+        shizukuStatus = addText(capture, "Shizuku · 待检查", 13, GREEN, true, 9);
+        shizukuPermissionButton = button(capture, "请求 Shizuku 授权 / 刷新状态", false, 8, () -> {
+            ShizukuTaskGate.get(this).requestPermission();
+            showFeedback("已检查 Shizuku 授权状态；先在 Shizuku 中启动服务，再点授权。状态更新见上方。");
+            refresh();
+        });
+        addText(capture, "满足所选模式的截图条件后，以 500 毫秒为目标间隔截取整屏。每次进入只观察首20秒：期间识别到有效成熟倒计时（包括已有提醒）即可继续截图，不要求读到昵称；之后不会因暂时无结果而暂停。首20秒始终无结果则暂停本次停留的新增截图，已保存图片继续识别。离开后重新进入、上下文变化或手动停止再开始可重试；迟到识别不会自动恢复已超时的截图。缺权限、锁屏或状态未知时仍暂停，手动停止也暂停队列处理。\n成熟词不证明游戏身份。请先关闭敏感页面，再手动进入农场。系统快照、使用记录和识别可能延迟，前台判断与截图不是原子操作，切换或覆盖可能截到其他应用或系统内容，多窗口不可靠，不保证只截农场或消除风控。", 13, MUTED, false, 9);
         usageAccessStatus = addText(capture, "使用情况访问 · 待检查", 13, GREEN, true, 9);
         captureStatus = addText(capture, "未运行", 13, INK, false, 14);
         foregroundStatus = addText(capture, "前台监测服务 · 未启动", 13, GREEN, true, 8);
@@ -176,7 +216,7 @@ public class MainActivity extends Activity {
         });
         button(capture, "查看无障碍设置", false, 8,
                 () -> openSettings(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
-        button(capture, "设置使用情况访问权限", false, 8, this::openUsageAccessSettings);
+        usageSettingsButton = button(capture, "设置使用情况访问权限", false, 8, this::openUsageAccessSettings);
 
         LinearLayout timing = card(page, 16, Color.WHITE);
         addText(timing, "提前多久提醒", 18, INK, true, 0);
@@ -236,7 +276,9 @@ public class MainActivity extends Activity {
         if (foregroundStartupPending || MonitorForegroundService.isActive) return;
         if (Build.VERSION.SDK_INT < 30) {
             showFeedback("此设备低于 Android 11，不支持所需的无障碍截图，无法开始监测。已有提醒仍可使用。");
-        } else if (!UsageAccessGate.hasPermission(this)) {
+        } else if (ShizukuTaskGate.isEnabled(this) && !ShizukuTaskGate.get(this).hasPermission()) {
+            showFeedback("Shizuku 尚未就绪，不能开始监测。先在 Shizuku 中以 ADB／无线调试 shell 模式启动服务（不支持 root），再点击本页授权按钮；不会自动回退使用情况模式。");
+        } else if (!ShizukuTaskGate.isEnabled(this) && !UsageAccessGate.hasPermission(this)) {
             showFeedback("尚未允许使用情况访问，不能开始监测。请在系统设置中允许，返回后手动开始。");
             openUsageAccessSettings();
         } else if (!FarmAccessibilityService.isEnabled(this)) {
@@ -343,6 +385,9 @@ public class MainActivity extends Activity {
     @Override protected void onSaveInstanceState(Bundle state) {
         state.putBoolean("exportPicking", exportState.picking);
         state.putBoolean("exportBusy", exportState.busy);
+        state.putBoolean("foregroundStartupPending", foregroundStartupPending);
+        state.putLong("foregroundStartupDeadline", foregroundStartupDeadline);
+        state.putString("foregroundErrorBeforeStart", foregroundErrorBeforeStart);
         super.onSaveInstanceState(state);
     }
 
@@ -432,8 +477,18 @@ public class MainActivity extends Activity {
         boolean enabled = FarmAccessibilityService.isEnabled(this);
         boolean connected = FarmAccessibilityService.isConnected;
         boolean running = FarmAccessibilityService.isRunning;
-        boolean usageAllowed = UsageAccessGate.hasPermission(this);
-        usageAccessStatus.setText(usageAllowed ? "使用情况访问 · 已允许" : "使用情况访问 · 未允许，不能新增截图");
+        boolean useShizuku = ShizukuTaskGate.isEnabled(this);
+        boolean usageAllowed = !useShizuku && UsageAccessGate.hasPermission(this);
+        boolean sourceReady = useShizuku ? ShizukuTaskGate.get(this).hasPermission() : usageAllowed;
+        usageAccessStatus.setText(useShizuku ? "使用情况访问 · 此模式不需要"
+                : usageAllowed ? "使用情况访问 · 已允许" : "使用情况访问 · 未允许，不能新增截图");
+        usageSettingsButton.setVisibility(useShizuku ? View.GONE : View.VISIBLE);
+        shizukuStatus.setVisibility(useShizuku ? View.VISIBLE : View.GONE);
+        shizukuPermissionButton.setVisibility(useShizuku ? View.VISIBLE : View.GONE);
+        if (useShizuku) shizukuStatus.setText("Shizuku · " + ShizukuTaskGate.get(this).status());
+        modeDescription.setText(useShizuku
+                ? "当前：Shizuku 系统任务模式。先安装 Shizuku，以 ADB／无线调试 shell 模式启动服务（不支持 root），再点授权。无需使用情况访问。只读固定系统任务命令，需前台任务、焦点、可见／RESUMED 状态与精确“QQ经典农场”任务描述标题匹配才截图；不是无障碍窗口标题。断连、撤权、快照过期或格式未知会暂停新增，不自动回退。权限范围实际比使用情况访问更大；标题兼容性待真机验收，不保证实时或无风险。"
+                : "当前：使用情况模式。需使用情况访问权限，以历史记录中的微信 AppBrand 小程序容器线索开始截图；不限固定容器编号，不能区分具体小程序，可能截图其他小游戏。不是农场身份核验。");
         boolean foregroundActive = MonitorForegroundService.isActive;
         String serviceError = MonitorForegroundService.lastError;
         boolean newServiceError = !blank(serviceError)
@@ -441,7 +496,9 @@ public class MainActivity extends Activity {
         if (foregroundStartupPending) {
             if (foregroundActive) {
                 foregroundStartupPending = false;
-                showFeedback(running ? "监测已开启；检测到小程序容器后开始截图。请手动进入农场，避免展示敏感页面。"
+                showFeedback(running ? (useShizuku
+                        ? "监测已开启；等待系统任务绑定与前台快照，符合农场任务条件后开始截图。请手动进入农场，避免展示敏感页面。"
+                        : "监测已开启；检测到小程序容器后开始截图。请手动进入农场，避免展示敏感页面。")
                         : "前台监测服务已启动，等待监测状态更新。");
             } else if (newServiceError) {
                 foregroundStartupPending = false;
@@ -453,6 +510,14 @@ public class MainActivity extends Activity {
         }
         foregroundStatus.setText("前台监测服务 · " + (foregroundActive ? "运行中" : "未启动")
                 + (foregroundStartupPending ? " · 等待启动" : ""));
+        updatingMode = true;
+        modeChoices.check(useShizuku ? shizukuMode.getId() : usageMode.getId());
+        updatingMode = false;
+        boolean modeEditable = canChangeMode();
+        usageMode.setEnabled(modeEditable);
+        shizukuMode.setEnabled(modeEditable);
+        modeHint.setText(modeEditable ? "仅停止监测后可切换模式；切换不会自动开始。"
+                : "监测运行或启动中，模式已锁定；请先停止监测，待前台服务停止后再切换。");
         boolean hasForegroundError = !foregroundActive && !foregroundStartupPending
                 && (foregroundRequestFailed || !blank(serviceError));
         foregroundError.setVisibility(hasForegroundError ? View.VISIBLE : View.GONE);
@@ -464,7 +529,7 @@ public class MainActivity extends Activity {
                 : !connected ? "等待系统连接无障碍服务；当前无法开始监测，请检查系统无障碍设置。"
                 : "无障碍服务已连接";
         runningLabel.setText(!supported ? "○  此设备不支持监测"
-                : !usageAllowed ? "○  使用情况访问未允许 · 不新增截图"
+                : !sourceReady ? (useShizuku ? "○  Shizuku 未就绪 · 不新增截图" : "○  使用情况访问未允许 · 不新增截图")
                 : !enabled || !connected ? "○  服务尚未就绪"
                 : running ? "●  监测已开启 · 截图状态见下方" : "○  监测未启动 · 队列保留");
         String status = FarmAccessibilityService.lastStatus;
@@ -491,10 +556,11 @@ public class MainActivity extends Activity {
         String diagnostics = FarmAccessibilityService.diagnostics;
         diagnosticsText.setText(blank(diagnostics) ? "暂无诊断数据。开始后可查看截图计数、OCR 处理与拒绝原因；不展示原图或完整识别文本。" : diagnostics);
         startButton.setEnabled(supported && !running && !foregroundActive
-                && !foregroundStartupPending && (!usageAllowed || !enabled || connected));
+                && !foregroundStartupPending && (!sourceReady || !enabled || connected));
         startButton.setAlpha(startButton.isEnabled() ? 1f : 0.55f);
         startButton.setText(!supported ? "此设备不支持监测"
-                : foregroundStartupPending ? "等待启动…" : !usageAllowed ? "设置使用情况访问权限"
+                : foregroundStartupPending ? "等待启动…" : !sourceReady
+                ? (useShizuku ? "检查 Shizuku 状态（请先授权）" : "设置使用情况访问权限")
                 : !enabled ? "检查无障碍设置"
                 : !connected ? "等待服务连接…" : running ? "监测已开启"
                 : foregroundActive ? "前台监测服务运行中" : "开始监测");
@@ -557,7 +623,7 @@ public class MainActivity extends Activity {
         if ("NOT_FOREGROUND".equals(status)) return "停止截图，已保存图片继续识别";
         if ("CAPTURE_NO_MATCH_TIMEOUT".equals(status))
             return "首20秒未识别到成熟倒计时，已暂停截图；离开后重新进入或手动重启监测可重试，已保存图片继续识别";
-        if (status.startsWith("等待微信前台"))
+        if (!ShizukuTaskGate.isEnabled(this) && status.startsWith("等待微信前台"))
             return "等待使用记录中的微信小程序容器线索；请手动进入农场。判断可能延迟，已保存图片继续识别";
         if (status.startsWith("处理完成:")) return "图片处理完成，不代表已添加提醒";
         return status;
@@ -572,12 +638,33 @@ public class MainActivity extends Activity {
             return "截图服务尚未就绪 · 已保存图片保留";
         if ("STOPPED".equals(progress.pauseReason) || !running)
             return "监测已停止 · 不再截图，队列保留等待手动开始";
-        if (!UsageAccessGate.hasPermission(this))
+        if (ShizukuTaskGate.isEnabled(this) && !ShizukuTaskGate.get(this).hasPermission())
+            return "Shizuku 未就绪 · 暂停新增截图，不自动回退；已保存图片仍可处理";
+        if (!ShizukuTaskGate.isEnabled(this) && !UsageAccessGate.hasPermission(this))
             return "使用情况访问未允许 · 不新增截图，已保存图片仍可处理";
         if ("NOT_FOREGROUND".equals(progress.pauseReason))
             return "当前不满足截图条件 · 停止截图，已保存图片继续识别";
         if (progress.capturePaused) return "新增截图已暂停 · 请查看监测状态，已保存图片保留";
-        return "小程序容器内截图，首20秒等待成熟倒计时 · 具体状态见监测状态，已保存图片按序处理";
+        return (ShizukuTaskGate.isEnabled(this) ? "农场系统任务条件满足时截图" : "小程序容器内截图")
+                + "，首20秒等待成熟倒计时 · 具体状态见监测状态，已保存图片按序处理";
+    }
+
+    private boolean canChangeMode() {
+        return !FarmAccessibilityService.isRunning && !MonitorForegroundService.isActive
+                && !foregroundStartupPending;
+    }
+
+    private RadioButton modeChoice(String text) {
+        RadioButton choice = new RadioButton(this);
+        choice.setId(View.generateViewId());
+        choice.setSaveEnabled(false);
+        choice.setText(text);
+        choice.setTextSize(14);
+        choice.setTextColor(INK);
+        choice.setButtonTintList(android.content.res.ColorStateList.valueOf(GREEN));
+        choice.setMinHeight(dp(48));
+        modeChoices.addView(choice, new RadioGroup.LayoutParams(-1, -2));
+        return choice;
     }
 
     private void updateLeadButtons() {

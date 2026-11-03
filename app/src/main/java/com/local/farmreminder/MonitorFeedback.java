@@ -90,7 +90,10 @@ public final class MonitorFeedback {
                 lastAddedAt = -REPEAT_WINDOW_MS;
                 lastFailedAt = -REPEAT_WINDOW_MS;
                 // Boundaries are immediate, never throttled by recognition feedback.
-                show(app, entered ? "检测到小程序容器，开始截图，首20秒内等待成熟倒计时" : "当前不满足截图条件，暂停截图；队列继续识别");
+                show(app, entered ? (ShizukuTaskGate.isEnabled(app)
+                        ? "检测到农场前台任务，开始截图，首20秒内等待成熟倒计时"
+                        : "检测到小程序容器，开始截图，首20秒内等待成熟倒计时")
+                        : "当前不满足截图条件，暂停截图；队列继续识别");
                 break;
             case CAPTURE_TIMED_OUT:
                 // The capture policy owns once-per-stay delivery; retain session/epoch guards.
