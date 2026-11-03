@@ -31,6 +31,12 @@ final class FarmIdentityRecognition {
                 if (x < .25 && text.equals("仓库")) warehouse = true;
                 if (x >= .15 && x <= .4 && text.equals("商店")) shop = true;
                 if (x >= .3 && x <= .55 && text.equals("宠物")) pet = true;
+                if ((double) line.left / width >= .15 && (double) line.right / width <= .55
+                        && (text.equals("商店宠物") || text.equals("商店(宠物")
+                        || text.equals("商店（宠物"))) {
+                    shop = true;
+                    pet = true;
+                }
             }
         }
         if (fullLogo || (logo && (help || percent))) return Outcome.LOADING;

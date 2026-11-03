@@ -25,6 +25,37 @@ public class FarmIdentityRecognitionTest {
         assertEquals(FarmIdentityRecognition.Outcome.NO_MATCH, check(warehouse, shop, pet, line("回家", 850, 400)));
         assertEquals(FarmIdentityRecognition.Outcome.NO_MATCH, check(warehouse, shop, line("宠物", 430, 899)));
     }
+    @Test public void observedMergedMenuIsHome() {
+        OcrLine warehouse = new OcrLine("仓库", 55, 2628, 176, 2679);
+        OcrLine merged = new OcrLine("商店 (宠物", 266, 2632, 537, 2674);
+        assertEquals(FarmIdentityRecognition.Outcome.HOME,
+                FarmIdentityRecognition.classify(Arrays.asList(warehouse, merged), 1240, 2772));
+    }
+    @Test public void mergedMenuAllowsOnlyNarrowSeparatorsAndPreservesInput() {
+        OcrLine warehouse = line("仓库", 100, 930);
+        for (String text : new String[]{"商店宠物", "商店 宠物", "商店 (宠物", "商店（宠物"}) {
+            OcrLine merged = new OcrLine(text, 210, 920, 440, 940);
+            java.util.List<OcrLine> input = new java.util.ArrayList<>(Arrays.asList(warehouse, merged));
+            assertEquals(text, FarmIdentityRecognition.Outcome.HOME, FarmIdentityRecognition.classify(input, 1000, 1000));
+            assertEquals(Arrays.asList(warehouse, merged), input);
+            assertEquals(text, merged.text);
+        }
+    }
+    @Test public void mergedMenuRejectsOtherWordsSeparatorsAndWrongRegions() {
+        OcrLine warehouse = line("仓库", 100, 930);
+        for (String text : new String[]{"宠物商店", "商店欢迎宠物", "广告商店宠物", "聊天：商店宠物", "商店,宠物", "商店)宠物", "商店", "宠物"}) {
+            assertEquals(text, FarmIdentityRecognition.Outcome.NO_MATCH,
+                    check(warehouse, new OcrLine(text, 210, 920, 440, 940)));
+        }
+        assertEquals(FarmIdentityRecognition.Outcome.NO_MATCH, check(warehouse, new OcrLine("商店宠物", 210, 100, 440, 120)));
+        assertEquals(FarmIdentityRecognition.Outcome.NO_MATCH, check(warehouse, new OcrLine("商店宠物", 100, 920, 440, 940)));
+        assertEquals(FarmIdentityRecognition.Outcome.NO_MATCH, check(warehouse, new OcrLine("商店宠物", 210, 920, 600, 940)));
+        assertEquals(FarmIdentityRecognition.Outcome.NO_MATCH, check(warehouse, new OcrLine("商店宠物", -1, -1, -1, -1)));
+        OcrLine merged = new OcrLine("商店宠物", 210, 920, 440, 940);
+        assertEquals(FarmIdentityRecognition.Outcome.NO_MATCH, check(merged));
+        assertEquals(FarmIdentityRecognition.Outcome.NO_MATCH, check(warehouse, merged, line("回家", 850, 400)));
+        assertEquals(FarmIdentityRecognition.Outcome.NO_MATCH, check(warehouse, merged, line("好友家", 850, 400)));
+    }
     @Test public void rejectUnlocatedGeneralWordsAndWrongRegions() {
         assertEquals(FarmIdentityRecognition.Outcome.NO_MATCH, FarmIdentityRecognition.classify(Collections.emptyList(), 1000, 1000));
         assertEquals(FarmIdentityRecognition.Outcome.NO_MATCH, check(new OcrLine("QQ经典农场", -1, -1, -1, -1)));
