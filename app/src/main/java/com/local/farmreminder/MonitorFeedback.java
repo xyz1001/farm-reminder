@@ -12,7 +12,7 @@ public final class MonitorFeedback {
     private static final long REPEAT_WINDOW_MS = 3000L;
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
 
-    private enum Event { ENTERED, EXITED, RECOGNIZED, ADDED, SAVE_FAILED }
+    private enum Event { ENTERED, EXITED, CAPTURE_TIMED_OUT, RECOGNIZED, ADDED, SAVE_FAILED }
 
     private static Toast activeToast;
     private static Runnable pendingRecognition;
@@ -52,6 +52,10 @@ public final class MonitorFeedback {
         dispatch(context, Event.EXITED);
     }
 
+    public static void captureTimedOut(Context context) {
+        dispatch(context, Event.CAPTURE_TIMED_OUT);
+    }
+
     public static void recognized(Context context) {
         dispatch(context, Event.RECOGNIZED);
     }
@@ -86,7 +90,12 @@ public final class MonitorFeedback {
                 lastAddedAt = -REPEAT_WINDOW_MS;
                 lastFailedAt = -REPEAT_WINDOW_MS;
                 // Boundaries are immediate, never throttled by recognition feedback.
-                show(app, entered ? "使用记录判断微信前台，开始截图" : "当前不满足截图条件，停止截图；队列继续识别");
+                show(app, entered ? "检测到小程序容器，开始截图，首20秒内等待成熟倒计时" : "当前不满足截图条件，暂停截图；队列继续识别");
+                break;
+            case CAPTURE_TIMED_OUT:
+                // The capture policy owns once-per-stay delivery; retain session/epoch guards.
+                cancelRecognition();
+                show(app, "进入小程序20秒内未识别到成熟倒计时，已暂停截图");
                 break;
             case RECOGNIZED:
                 if (now - lastRecognizedAt < REPEAT_WINDOW_MS) return;

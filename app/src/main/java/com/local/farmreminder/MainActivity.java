@@ -122,7 +122,7 @@ public class MainActivity extends Activity {
         runningLabel = addText(capture, "○  监测未启动", 13, GREEN, true, 0);
         addText(capture, "记录好友农场的成熟时间", 20, INK, true, 12);
         addText(capture, "需自行开启使用情况访问权限和仅用于截图的无障碍服务，不读取节点树或监听界面事件。截图与识别结果保存在应用私有目录，不自动删除，仅手动导出，不自动上传。", 14, MUTED, false, 9);
-        addText(capture, "按使用记录判断微信前台时截取整屏；无法区分农场与聊天，切换或覆盖时可能截到其他内容。开始前请关闭敏感页面，手动进入农场。判断可能延迟，多窗口不可靠，不保证消除风控。仍需手动开始/停止；缺权限、锁屏或状态未知时不新增截图，手动停止也暂停队列处理。", 13, MUTED, false, 9);
+        addText(capture, "检测到微信小程序容器后，以 500 毫秒为目标间隔截取整屏。每次进入只观察首20秒：期间识别到有效成熟倒计时（包括已有提醒）即可继续截图，不要求读到昵称；之后不会因暂时无结果而暂停。首20秒始终无结果则暂停本次停留的新增截图，已保存图片继续识别。离开后重新进入、上下文变化或手动停止再开始可重试；迟到识别不会自动恢复已超时的截图。缺权限、锁屏或状态未知时仍暂停，手动停止也暂停队列处理。\n这不是农场身份核验，也可能截到其他小游戏；成熟词不证明游戏身份。请先关闭敏感页面，再手动进入农场。使用记录和识别可能延迟，切换或覆盖可能截到其他应用或系统内容，多窗口不可靠，不保证消除风控。", 13, MUTED, false, 9);
         usageAccessStatus = addText(capture, "使用情况访问 · 待检查", 13, GREEN, true, 9);
         captureStatus = addText(capture, "未运行", 13, INK, false, 14);
         foregroundStatus = addText(capture, "前台监测服务 · 未启动", 13, GREEN, true, 8);
@@ -151,7 +151,7 @@ public class MainActivity extends Activity {
             } catch (RuntimeException e) { showFeedback("未能请求重试，请稍后再试。失败图片仍保留。"); }
         });
         retryButton.setVisibility(View.GONE);
-        addText(progress, "识别后的截图也会保留，用于核对；不会自动上传。请复现后停止监测并导出，避免持续占用空间。", 12, MUTED, false, 10);
+        addText(progress, "所有已保存截图在识别后仍会保留，用于核对；不会自动上传。请复现后停止监测并导出，避免持续占用空间。", 12, MUTED, false, 10);
         addText(progress, "可先手动离开微信，确认已停止新增截图并等待队列处理完成，再停止监测并导出。诊断包包含截图、识别文字及好友昵称等敏感信息，仅交给可信人员；请选择可信的保存位置。", 12, MUTED, false, 8);
         exportButton = button(progress, "导出诊断包", false, 10, this::requestDiagnosticsExport);
         exportStatus = addText(progress, "无需启动监测或启用无障碍服务即可导出已有记录。", 12, MUTED, false, 7);
@@ -228,7 +228,7 @@ public class MainActivity extends Activity {
         reminders = column();
         page.addView(reminders, spaced(-1, -2, 4));
         addText(page, "识别规则", 14, INK, true, 25);
-        addText(page, "单张截图识别到成熟倒计时即添加提醒；名称读不到时标为“昵称未识别”；生长阶段倒计时不作为成熟时间。仅在 OCR 解析中将“后戌熟”定向纠正为“后成熟”，原始截图与 OCR 文件保持原样。请核对记录。", 13, MUTED, false, 7);
+        addText(page, "单张截图识别到成熟倒计时即添加提醒；名称读不到时标为“昵称未识别”；已有提醒不重复添加，也算本次首20秒内的有效结果。生长阶段倒计时不作为成熟时间。仅在 OCR 解析中将“后戌熟”定向纠正为“后成熟”，原始截图与 OCR 文件保持原样。请核对记录。", 13, MUTED, false, 7);
         addText(page, "仅在本机处理画面，不上传数据。不会自动点击微信或操作游戏，不需要悬浮窗权限。", 12, MUTED, false, 12);
     }
 
@@ -441,7 +441,7 @@ public class MainActivity extends Activity {
         if (foregroundStartupPending) {
             if (foregroundActive) {
                 foregroundStartupPending = false;
-                showFeedback(running ? "监测已开启；按使用记录判断微信前台时截取整屏。请手动进入农场，避免展示敏感页面。"
+                showFeedback(running ? "监测已开启；检测到小程序容器后开始截图。请手动进入农场，避免展示敏感页面。"
                         : "前台监测服务已启动，等待监测状态更新。");
             } else if (newServiceError) {
                 foregroundStartupPending = false;
@@ -466,7 +466,7 @@ public class MainActivity extends Activity {
         runningLabel.setText(!supported ? "○  此设备不支持监测"
                 : !usageAllowed ? "○  使用情况访问未允许 · 不新增截图"
                 : !enabled || !connected ? "○  服务尚未就绪"
-                : running ? "●  监测已开启 · 按使用记录判断前台" : "○  监测未启动 · 队列保留");
+                : running ? "●  监测已开启 · 截图状态见下方" : "○  监测未启动 · 队列保留");
         String status = FarmAccessibilityService.lastStatus;
         captureStatus.setText(readiness + "\n监测状态：" + monitorStatusText(status));
         OcrProgress progress = FarmAccessibilityService.getOcrProgress();
@@ -526,7 +526,7 @@ public class MainActivity extends Activity {
         if (items.isEmpty()) {
             LinearLayout empty = card(reminders, 10, 0xFFEDEFE6);
             addText(empty, "还没有成熟提醒", 17, INK, true, 0);
-            addText(empty, "开始监测后，请手动在微信打开好友农场。单张截图识别到成熟倒计时即添加提醒；名称读不到时标为“昵称未识别”；生长阶段倒计时不作为成熟时间。", 14, MUTED, false, 9);
+            addText(empty, "开始监测后，请手动在微信打开好友农场的成熟时间详情。每次进入的首20秒内需识别到成熟倒计时，否则暂停截图；离开后重新进入或手动重启监测可重试。名称读不到不影响添加提醒；生长阶段倒计时不作为成熟时间。", 14, MUTED, false, 9);
             return;
         }
         SimpleDateFormat date = new SimpleDateFormat("yyyy年M月d日 HH:mm:ss", Locale.CHINA);
@@ -555,8 +555,10 @@ public class MainActivity extends Activity {
         if ("WRITE_FAILED".equals(status)) return "截图保存遇到问题，暂停新增截图";
         if ("SERVICE_UNAVAILABLE".equals(status)) return "截图服务暂不可用，请检查服务连接";
         if ("NOT_FOREGROUND".equals(status)) return "停止截图，已保存图片继续识别";
+        if ("CAPTURE_NO_MATCH_TIMEOUT".equals(status))
+            return "首20秒未识别到成熟倒计时，已暂停截图；离开后重新进入或手动重启监测可重试，已保存图片继续识别";
         if (status.startsWith("等待微信前台"))
-            return "等待使用记录判断微信前台；请手动进入农场。判断可能延迟，已保存图片继续识别";
+            return "等待使用记录中的微信小程序容器线索；请手动进入农场。判断可能延迟，已保存图片继续识别";
         if (status.startsWith("处理完成:")) return "图片处理完成，不代表已添加提醒";
         return status;
     }
@@ -575,7 +577,7 @@ public class MainActivity extends Activity {
         if ("NOT_FOREGROUND".equals(progress.pauseReason))
             return "当前不满足截图条件 · 停止截图，已保存图片继续识别";
         if (progress.capturePaused) return "新增截图已暂停 · 请查看监测状态，已保存图片保留";
-        return "按使用记录判断微信前台时截取整屏 · 已保存图片按序处理";
+        return "小程序容器内截图，首20秒等待成熟倒计时 · 具体状态见监测状态，已保存图片按序处理";
     }
 
     private void updateLeadButtons() {

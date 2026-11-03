@@ -38,6 +38,7 @@ public final class DurableFrameEngine {
         void onStatus(String status);
         void onFatal(String status);
         void onFrameFailure(String anonymousCode, long processingEpoch);
+        default void onMaturityRecognized(DiskFrameStore.Frame frame, long processingEpoch) { }
     }
     private static final long RESERVE = 128L * 1024 * 1024, TIMEOUT_MS = 12000;
     private static DurableFrameEngine instance;
@@ -287,6 +288,13 @@ public final class DurableFrameEngine {
             store.writeDiagnostic(frame, "ocr-lines.tsv", DiagnosticCodec.lines(rawLines));
             String friend = OcrFrameParser.reminderName(lines, frame.width, frame.height);
             List<Long> countdown = OcrFrameParser.countdowns(lines);
+            if (!countdown.isEmpty() && fence.valid(token)) {
+                Listener expected = listener;
+                main.post(() -> {
+                    if (fence.valid(token) && listener == expected && expected != null && listenerEpoch == token)
+                        expected.onMaturityRecognized(frame, token);
+                });
+            }
             store.writeDiagnostic(frame, "result.properties", DiagnosticCodec.result(frame, friend, countdown, null));
             int lead = context.getSharedPreferences("settings", Context.MODE_PRIVATE).getInt("leadSeconds", 60);
             admitted = fence.tryAdmitTransaction(token);

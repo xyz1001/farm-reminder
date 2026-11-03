@@ -43,7 +43,11 @@ public class FarmAccessibilityService extends AccessibilityService {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Executor mainExecutor = handler::post;
     private final SamplingPolicy policy = new SamplingPolicy();
+    private final ContainerCapturePolicy containerPolicy = new ContainerCapturePolicy();
     private final Runnable sample = this::sample;
+    private Runnable deadlineCallback;
+    private String foregroundKey, candidateClass;
+    private final java.util.Set<Long> acceptedSequences = new java.util.HashSet<>();
     private boolean foreground, destroyed, receiverRegistered;
     private boolean usagePermission, screenInteractive, screenLocked = true, userUnlocked;
     private String captureSession = UUID.randomUUID().toString(), reason = "等待启动";
@@ -56,6 +60,15 @@ public class FarmAccessibilityService extends AccessibilityService {
         }
     };
     private final DurableFrameEngine.Listener listener = new DurableFrameEngine.Listener() {
+        @Override public void onMaturityRecognized(DiskFrameStore.Frame frame, long epoch) {
+            if (!alive() || !isRunning || engine == null || epoch != runEpoch || epoch != engine.epoch()) return;
+            updateForeground();
+            checkDeadline();
+            if (foreground && captureSession.equals(frame.sessionId) && acceptedSequences.remove(frame.captureSequence)
+                    && containerPolicy.recognize(frame.sessionId, epoch, true, SystemClock.elapsedRealtime())) {
+                cancelDeadline(); publish();
+            }
+        }
         @Override public void onProgress(OcrProgress progress) {
             if (!alive()) return;
             publish();
@@ -64,11 +77,13 @@ public class FarmAccessibilityService extends AccessibilityService {
         @Override public void onFrameResult(DiskFrameStore.Frame frame, List<OcrLine> lines,
                                             ReminderStore.FrameOutcome outcome, long epoch) {
             if (!alive() || !isRunning || engine == null || epoch != runEpoch || epoch != engine.epoch()) return;
+            if (captureSession.equals(frame.sessionId)) acceptedSequences.remove(frame.captureSequence);
             if (outcome.committed && !outcome.replay) {
                 if (outcome.confirmed) { recognizedEvents++; MonitorFeedback.recognized(FarmAccessibilityService.this); }
                 if (outcome.added) { added++; MonitorFeedback.added(FarmAccessibilityService.this); }
             }
-            reason = !foreground ? "等待微信前台，停止截图，旧图继续识别"
+            reason = containerPolicy.timedOut() ? "CAPTURE_NO_MATCH_TIMEOUT：观察窗未识别到成熟倒计时，已暂停截图"
+                    : !foreground ? "等待微信容器，停止截图，旧图继续识别"
                     : outcome.code == null ? "处理完成" : "处理完成: " + outcome.code;
             lastStatus = reason; publish(); schedule();
         }
@@ -88,7 +103,8 @@ public class FarmAccessibilityService extends AccessibilityService {
             if ("BUSINESS_FAILED".equals(anonymousCode)) {
                 saveFailures++; MonitorFeedback.saveFailed(FarmAccessibilityService.this);
             }
-            reason = anonymousCode; lastStatus = reason; publish();
+            reason = containerPolicy.timedOut() ? "CAPTURE_NO_MATCH_TIMEOUT：观察窗未识别到成熟倒计时，已暂停截图" : anonymousCode;
+            lastStatus = reason; publish();
         }
     };
 
@@ -168,7 +184,7 @@ public class FarmAccessibilityService extends AccessibilityService {
     private void stopSession(boolean stopEngine) {
         if (!alive()) return;
         if (stopEngine && engine != null && isRunning && engine.epoch() == runEpoch) engine.stop();
-        isRunning = false; handler.removeCallbacks(sample); policy.invalidate();
+        isRunning = false; handler.removeCallbacks(sample); cancelDeadline(); containerPolicy.clear(); foregroundKey = null; candidateClass = null; policy.invalidate();
         leaveScene(); foreground = false; newCaptureSession();
         MonitorFeedback.setSessionActive(this, false);
         getSharedPreferences("settings", MODE_PRIVATE).edit().putBoolean("monitoringEnabled", false).apply();
@@ -185,8 +201,8 @@ public class FarmAccessibilityService extends AccessibilityService {
         if (alive()) { stopSession(true); detachListener(); isConnected = false; instance = null; lastStatus = "服务断开，请重新启动监测"; }
         return super.onUnbind(intent);
     }
-    private void newCaptureSession() { captureSession = UUID.randomUUID().toString(); captureSequence = 0; }
-    private boolean inferForeground() {
+    private void newCaptureSession() { captureSession = UUID.randomUUID().toString(); captureSequence = 0; acceptedSequences.clear(); }
+    private UsageForegroundPolicy.Candidate inferForeground() {
         usagePermission = false; screenInteractive = false; screenLocked = true; userUnlocked = false;
         try {
             usagePermission = UsageAccessGate.hasPermission(this);
@@ -196,16 +212,16 @@ public class FarmAccessibilityService extends AccessibilityService {
             userUnlocked = user != null && user.isUserUnlocked();
             screenInteractive = power != null && power.isInteractive();
             screenLocked = keyguard == null || keyguard.isKeyguardLocked();
-            if (!usagePermission || !userUnlocked || !screenInteractive || screenLocked) return false;
+            if (!usagePermission || !userUnlocked || !screenInteractive || screenLocked) return null;
             UsageStatsManager manager = (UsageStatsManager) getSystemService(USAGE_STATS_SERVICE);
-            if (manager == null) return false;
+            if (manager == null) return null;
             long end = System.currentTimeMillis();
             UsageEvents events = manager.queryEvents(end - 24L * 60 * 60 * 1000, end);
-            if (events == null) return false;
+            if (events == null) return null;
             UsageForegroundPolicy inference = new UsageForegroundPolicy();
             UsageEvents.Event event = new UsageEvents.Event();
             while (events.hasNextEvent()) {
-                if (!events.getNextEvent(event)) return false;
+                if (!events.getNextEvent(event)) return null;
                 int type = event.getEventType();
                 int action;
                 if (type == UsageEvents.Event.DEVICE_SHUTDOWN || type == UsageEvents.Event.DEVICE_STARTUP) action = UsageForegroundPolicy.RESET;
@@ -215,34 +231,66 @@ public class FarmAccessibilityService extends AccessibilityService {
                 else continue;
                 inference.event(event.getTimeStamp(), event.getPackageName(), event.getClassName(), action);
             }
-            return inference.canCapture(usagePermission, userUnlocked, screenInteractive, screenLocked);
-        } catch (RuntimeException e) { return false; }
+            return inference.candidate(usagePermission, userUnlocked, screenInteractive, screenLocked);
+        } catch (RuntimeException e) { return null; }
     }
     private boolean updateForeground() {
         if (!alive()) return false;
-        boolean now = isRunning && inferForeground();
-        if (foreground != now) {
+        UsageForegroundPolicy.Candidate candidate = isRunning ? inferForeground() : null;
+        String key = candidate == null ? null : candidate.key();
+        boolean now = candidate != null;
+        if (!java.util.Objects.equals(foregroundKey, key)) {
             if (foreground) leaveScene();
-            else { sceneEnters++; MonitorFeedback.entered(this); }
+            cancelDeadline(); containerPolicy.clear();
             newCaptureSession(); policy.invalidate();
-            foreground = now;
-            reason = now ? "推断微信处于前台，正在采集" : "等待微信前台或使用情况权限，停止截图，旧图继续识别";
+            foreground = now; foregroundKey = key; candidateClass = now ? candidate.className : null;
+            if (now) {
+                sceneEnters++; MonitorFeedback.entered(this);
+                containerPolicy.enter(captureSession, runEpoch, SystemClock.elapsedRealtime());
+                armDeadline(captureSession, runEpoch);
+            }
+            reason = now ? "微信小程序容器观察中" : "等待微信容器或使用情况权限，停止截图，旧图继续识别";
             lastStatus = reason; publish();
         }
         return now;
+    }
+    private void cancelDeadline() {
+        if (deadlineCallback != null) handler.removeCallbacks(deadlineCallback);
+        deadlineCallback = null;
+    }
+    private void armDeadline(String session, long epoch) {
+        cancelDeadline();
+        deadlineCallback = () -> {
+            if (!alive() || !isRunning || !containerPolicy.matches(session, epoch)) return;
+            updateForeground();
+            if (!containerPolicy.matches(session, epoch)) return;
+            checkDeadline();
+            if (!containerPolicy.timedOut() && !containerPolicy.recognized()) armDeadline(session, epoch);
+        };
+        handler.postDelayed(deadlineCallback, containerPolicy.remaining(SystemClock.elapsedRealtime()));
+    }
+    private void checkDeadline() {
+        if (containerPolicy.expire(SystemClock.elapsedRealtime())) {
+            cancelDeadline();
+            reason = "CAPTURE_NO_MATCH_TIMEOUT：观察窗未识别到成熟倒计时，已暂停截图";
+            lastStatus = reason; MonitorFeedback.captureTimedOut(this); publish();
+        }
     }
     private void schedule() {
         if (!alive()) return;
         handler.removeCallbacks(sample);
         if (!isRunning) return;
+        checkDeadline();
         if (capture.captureBusy()) { handler.postDelayed(sample, 1000); return; }
-        if (!foreground || engine == null || !engine.canCapture()) { handler.postDelayed(sample, 1000); return; }
+        if (!foreground || containerPolicy.timedOut() || engine == null || !engine.canCapture()) { handler.postDelayed(sample, 1000); return; }
         long now = SystemClock.elapsedRealtime();
         handler.postDelayed(sample, Math.max(0, Math.max(policy.next(now), nextCaptureAllowed) - now));
     }
     private void sample() {
         if (!alive() || !isRunning) return;
-        if (!updateForeground() || capture.captureBusy() || engine == null || !engine.canCapture()) { schedule(); return; }
+        if (!updateForeground()) { schedule(); return; }
+        checkDeadline();
+        if (containerPolicy.timedOut() || capture.captureBusy() || engine == null || !engine.canCapture()) { schedule(); return; }
         long now = SystemClock.elapsedRealtime();
         long next = Math.max(policy.next(now), nextCaptureAllowed);
         if (next > now) { handler.postDelayed(sample, next - now); return; }
@@ -254,7 +302,7 @@ public class FarmAccessibilityService extends AccessibilityService {
         try {
             if (Build.VERSION.SDK_INT >= 30) takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, callback(session, sequence, request, uptime, wall));
         } catch (RuntimeException e) {
-            capture.endCapture(request); newCaptureSession(); errors++; reason = "截图请求失败"; lastStatus = reason; publish(); schedule();
+            capture.endCapture(request); errors++; reason = "截图请求失败"; lastStatus = reason; publish(); schedule();
         }
     }
     @android.annotation.TargetApi(30)
@@ -278,10 +326,10 @@ public class FarmAccessibilityService extends AccessibilityService {
                     frame.width = copy.getWidth(); frame.height = copy.getHeight();
                     hardware.recycle(); hardware = null; buffer.close(); buffer = null;
                     if (!currentCapture(session, request)) return;
-                    engine(FarmAccessibilityService.this).accept(copy, frame); copy = null; screenshots++;
+                    engine(FarmAccessibilityService.this).accept(copy, frame); acceptedSequences.add(sequence); copy = null; screenshots++;
                 } catch (RuntimeException e) {
                     errors++;
-                    if (current && alive()) { newCaptureSession(); reason = "截图保存交接失败"; lastStatus = reason; }
+                    if (current && alive()) { reason = "截图保存交接失败"; lastStatus = reason; }
                 } finally {
                     capture.endCapture(request);
                     if (hardware != null) hardware.recycle(); if (buffer != null) buffer.close(); if (copy != null) copy.recycle();
@@ -292,7 +340,7 @@ public class FarmAccessibilityService extends AccessibilityService {
                 boolean current = currentCapture(session, request);
                 capture.endCapture(request);
                 if (current && alive()) {
-                    newCaptureSession(); errors++;
+                    errors++;
                     if (code == ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT) nextCaptureAllowed = SystemClock.elapsedRealtime() + 2000;
                     reason = "截图错误代码 " + code; lastStatus = reason; publish(); schedule();
                 } else if (alive() && isRunning) { publish(); schedule(); }
@@ -303,8 +351,9 @@ public class FarmAccessibilityService extends AccessibilityService {
         if (!CaptureAdmissionPolicy.allowed(capture.captureUsable(request), alive(), isRunning,
                 foreground, session, captureSession)) return false;
         boolean inferred = updateForeground();
+        checkDeadline();
         return CaptureAdmissionPolicy.allowed(capture.captureUsable(request), alive(), isRunning,
-                inferred, session, captureSession);
+                inferred && !containerPolicy.timedOut(), session, captureSession);
     }
     private void detachListener() {
         // detach compares the listener registration epoch, not the fence's post-stop epoch.
@@ -329,6 +378,9 @@ public class FarmAccessibilityService extends AccessibilityService {
                 + "\n使用情况权限 " + usagePermission + " · 用户解锁 " + userUnlocked
                 + " · 屏幕开启 " + screenInteractive + " · 锁屏 " + screenLocked
                 + " · 推断微信前台 " + foreground + " · 进入/退出 " + sceneEnters + "/" + sceneExits
+                + " · 容器 " + (candidateClass == null ? "无" : candidateClass)
+                + " · 首窗 " + (containerPolicy.timedOut() ? "超时" : containerPolicy.recognized() ? "已通过" : foreground ? "观察中" : "无")
+                + " · 剩余ms " + containerPolicy.remaining(SystemClock.elapsedRealtime())
                 + " · 识别反馈 " + recognizedEvents + " · 新增 " + added + " · 处理失败 " + frameFailures + " · 保存失败 " + saveFailures + "\n" + reason;
         dumpSnapshot = "pid=" + Process.myPid() + " instance=" + instanceSequence + " owner=" + alive()
                 + " running=" + isRunning + " foreground=" + foreground + " captureInFlight=" + capture.captureBusy()
@@ -343,7 +395,7 @@ public class FarmAccessibilityService extends AccessibilityService {
     }
     @Override public void onDestroy() {
         if (alive()) { stopSession(true); detachListener(); isConnected = false; instance = null; lastStatus = "服务断开，请重新启动监测"; }
-        destroyed = true; handler.removeCallbacks(sample);
+        destroyed = true; handler.removeCallbacks(sample); cancelDeadline();
         if (receiverRegistered) { try { unregisterReceiver(screenReceiver); } catch (IllegalArgumentException ignored) { } receiverRegistered = false; }
         super.onDestroy();
     }
