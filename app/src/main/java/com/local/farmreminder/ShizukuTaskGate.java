@@ -23,15 +23,15 @@ public final class ShizukuTaskGate {
             this.component = component; this.reason = reason; this.age = age; this.generation = generation;
         }
     }
-    private static final long PERMISSION_TTL = 3000;
     private static volatile ShizukuTaskGate instance;
     private final Context context;
     private final ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor();
     private final Shizuku.UserServiceArgs args;
     private final GateState query = new GateState();
+    private final ShizukuPermissionState authorization = new ShizukuPermissionState();
     private final AsyncControl control;
-    private boolean active, granted, binding, initialized, poll, request, queryWanted, bindWanted;
-    private long epoch, generation, started = -1, permissionAt = -1;
+    private boolean active, binding, initialized, poll, request, queryWanted, bindWanted;
+    private long epoch, generation, started = -1;
     private ITaskQuery service;
     private IBinder pendingBinder;
     private ServiceConnection connection, cleanup;
@@ -75,8 +75,8 @@ public final class ShizukuTaskGate {
     }
     public boolean hasPermission() {
         synchronized (this) {
-            if (!permissionFresh()) { poll = true; control.wake(); return false; }
-            return granted;
+            if (!permissionFresh()) { poll = true; control.wake(); }
+            return authorization.knownGrant();
         }
     }
     public synchronized String status() {
@@ -101,13 +101,12 @@ public final class ShizukuTaskGate {
     }
     public synchronized Snapshot snapshot() {
         long age = started < 0 ? Long.MAX_VALUE : SystemClock.elapsedRealtime() - started;
-        if (!active || !isEnabled(context) || !permissionFresh() || !GateState.fresh(age))
+        if (!authorization.runtimeReady(active, isEnabled(context), SystemClock.elapsedRealtime(), age))
             return new Snapshot("UNKNOWN", null, null, "stale or unavailable", age, generation);
         return new Snapshot(state, key, component, reason, age, generation);
     }
     private boolean permissionFresh() {
-        long age = SystemClock.elapsedRealtime() - permissionAt;
-        return granted && permissionAt >= 0 && age >= 0 && age < PERMISSION_TTL;
+        return authorization.fresh(SystemClock.elapsedRealtime());
     }
     private void invalidate(String why) {
         query.invalidate(); state = "UNKNOWN"; key = component = null; reason = why; status = why;
@@ -118,14 +117,13 @@ public final class ShizukuTaskGate {
         connection = null; service = null; pendingBinder = null; binding = false;
     }
     private void permissionInvalid(String why) {
-        granted = false; permissionAt = -1; epoch++; invalidate(why); detach();
+        authorization.invalidate(); epoch++; invalidate(why); detach();
     }
     private void tick() {
         synchronized (this) {
-            if (active && isEnabled(context)) {
-                if (granted && !permissionFresh()) permissionInvalid("授权检查超时");
-                poll = true; queryWanted = true; bindWanted = true;
-            }
+            boolean enabled = isEnabled(context);
+            if (ShizukuPermissionState.shouldPoll(enabled)) poll = true;
+            if (ShizukuPermissionState.shouldQuery(active, enabled)) { queryWanted = true; bindWanted = true; }
         }
         control.wake();
     }
@@ -191,7 +189,7 @@ public final class ShizukuTaskGate {
                 synchronized (this) {
                     if (epoch == run) {
                         if (!ok) permissionInvalid(message);
-                        else { granted = true; permissionAt = SystemClock.elapsedRealtime(); if (service == null) status = message; }
+                        else { authorization.grant(SystemClock.elapsedRealtime()); if (service == null) status = message; }
                     }
                 }
             } else if (action == 5) {
@@ -212,8 +210,9 @@ public final class ShizukuTaskGate {
                 try { result = target.queryForegroundTask(); } catch (Exception ignored) { }
                 synchronized (this) {
                     boolean valid = query.finish(token, SystemClock.elapsedRealtime() - queryStart);
-                    if (!valid || !active || epoch != run || service != target || !isEnabled(context) || !permissionFresh()) continue;
-                    if (result == null) { invalidate("查询失败或超时"); continue; }
+                    if (!valid || !active || epoch != run || service != target || !isEnabled(context)) continue;
+                    if (result == null) { permissionInvalid("查询失败或超时"); continue; }
+                    if (!permissionFresh()) continue;
                     String value = result.getString("state", "UNKNOWN");
                     String k = result.getString("key"), c = result.getString("component");
                     if ((!"MATCH".equals(value) && !"NON_MATCH".equals(value)) || ("MATCH".equals(value) && (k == null || c == null))) {
