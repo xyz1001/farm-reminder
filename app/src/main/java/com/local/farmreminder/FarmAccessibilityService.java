@@ -3,6 +3,8 @@ package com.local.farmreminder;
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.AccessibilityServiceInfo;
 import android.app.KeyguardManager;
+import android.app.usage.UsageEvents;
+import android.app.usage.UsageStatsManager;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
@@ -17,11 +19,10 @@ import android.os.Looper;
 import android.os.PowerManager;
 import android.os.Process;
 import android.os.SystemClock;
+import android.os.UserManager;
 import android.view.Display;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityManager;
-import android.view.accessibility.AccessibilityNodeInfo;
-import android.view.accessibility.AccessibilityWindowInfo;
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
 import java.util.List;
@@ -42,10 +43,9 @@ public class FarmAccessibilityService extends AccessibilityService {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Executor mainExecutor = handler::post;
     private final SamplingPolicy policy = new SamplingPolicy();
-    private final MiniProgramWindowPolicy windowPolicy = new MiniProgramWindowPolicy();
     private final Runnable sample = this::sample;
-    private boolean foreground, focusVerified, destroyed, receiverRegistered;
-    private int windowId = -1;
+    private boolean foreground, destroyed, receiverRegistered;
+    private boolean usagePermission, screenInteractive, screenLocked = true, userUnlocked;
     private String captureSession = UUID.randomUUID().toString(), reason = "等待启动";
     private long captureSequence, runEpoch, nextCaptureAllowed, screenshots, errors;
     private long sceneEnters, sceneExits, recognizedEvents, added, saveFailures, frameFailures;
@@ -68,7 +68,7 @@ public class FarmAccessibilityService extends AccessibilityService {
                 if (outcome.confirmed) { recognizedEvents++; MonitorFeedback.recognized(FarmAccessibilityService.this); }
                 if (outcome.added) { added++; MonitorFeedback.added(FarmAccessibilityService.this); }
             }
-            reason = !foreground ? "等待小程序窗口事件，停止截图，旧图继续识别"
+            reason = !foreground ? "等待微信前台，停止截图，旧图继续识别"
                     : outcome.code == null ? "处理完成" : "处理完成: " + outcome.code;
             lastStatus = reason; publish(); schedule();
         }
@@ -134,6 +134,12 @@ public class FarmAccessibilityService extends AccessibilityService {
         FarmAccessibilityService previous = instance;
         if (previous != null) previous.retire();
         instance = this; isConnected = true; isRunning = false;
+        AccessibilityServiceInfo info = getServiceInfo();
+        if (info != null) {
+            info.eventTypes = 0;
+            info.flags &= ~AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
+            setServiceInfo(info);
+        }
         engine(this).refresh(); newCaptureSession();
         IntentFilter filter = new IntentFilter();
         filter.addAction(Intent.ACTION_SCREEN_OFF); filter.addAction(Intent.ACTION_SCREEN_ON); filter.addAction(Intent.ACTION_USER_PRESENT);
@@ -156,14 +162,14 @@ public class FarmAccessibilityService extends AccessibilityService {
         runEpoch = e.epoch(); isRunning = true;
         MonitorFeedback.setSessionActive(this, true);
         getSharedPreferences("settings", MODE_PRIVATE).edit().putBoolean("monitoringEnabled", true).apply();
-        newCaptureSession(); foreground = false; focusVerified = false; windowId = -1; windowPolicy.reset(); policy.invalidate();
-        reason = "等待小程序窗口事件"; lastStatus = reason; updateForeground(); publish(); schedule();
+        newCaptureSession(); foreground = false; policy.invalidate();
+        reason = "等待微信前台推断"; lastStatus = reason; updateForeground(); publish(); schedule();
     }
     private void stopSession(boolean stopEngine) {
         if (!alive()) return;
         if (stopEngine && engine != null && isRunning && engine.epoch() == runEpoch) engine.stop();
         isRunning = false; handler.removeCallbacks(sample); policy.invalidate();
-        leaveScene(); foreground = false; focusVerified = false; windowId = -1; windowPolicy.reset(); newCaptureSession();
+        leaveScene(); foreground = false; newCaptureSession();
         MonitorFeedback.setSessionActive(this, false);
         getSharedPreferences("settings", MODE_PRIVATE).edit().putBoolean("monitoringEnabled", false).apply();
         reason = "已停止"; lastStatus = reason; publish();
@@ -173,69 +179,64 @@ public class FarmAccessibilityService extends AccessibilityService {
         handler.removeCallbacks(sample);
         if (receiverRegistered) { try { unregisterReceiver(screenReceiver); } catch (IllegalArgumentException ignored) { } receiverRegistered = false; }
     }
-    @Override public void onAccessibilityEvent(AccessibilityEvent event) {
-        if (!alive() || !isRunning || event == null) return;
-        int type = event.getEventType();
-        if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED || type == AccessibilityEvent.TYPE_WINDOWS_CHANGED)
-            windowPolicy.onWindowEvent(text(event.getPackageName()), text(event.getClassName()), event.getWindowId(), "event");
-        updateForeground();
-        schedule();
-    }
+    @Override public void onAccessibilityEvent(AccessibilityEvent event) { }
     @Override public void onInterrupt() { if (alive()) { stopSession(true); lastStatus = "服务中断，请重新启动"; } }
     @Override public boolean onUnbind(Intent intent) {
         if (alive()) { stopSession(true); detachListener(); isConnected = false; instance = null; lastStatus = "服务断开，请重新启动监测"; }
         return super.onUnbind(intent);
     }
-    private static String text(CharSequence value) { return value == null ? null : value.toString(); }
-    private void inspectFocusedWindow() {
-        PowerManager power = (PowerManager) getSystemService(POWER_SERVICE);
-        KeyguardManager keyguard = (KeyguardManager) getSystemService(KEYGUARD_SERVICE);
-        boolean interactive = power != null && power.isInteractive();
-        boolean locked = keyguard == null || keyguard.isKeyguardLocked();
-        focusVerified = false;
-        if (!interactive || locked) { windowPolicy.onFocusedWindow(null, -1, interactive, locked); return; }
-        AccessibilityNodeInfo active = getRootInActiveWindow();
-        if (active == null) return;
-        try {
-            int id = active.getWindowId();
-            String pkg = text(active.getPackageName());
-            for (AccessibilityWindowInfo w : getWindows()) {
-                if (w.getId() != id) continue;
-                // Input methods and system overlays temporarily obscure the app. Suspend
-                // capture until an active focused application is observable again.
-                if (w.getType() != AccessibilityWindowInfo.TYPE_APPLICATION || !w.isActive() || !w.isFocused()) return;
-                focusVerified = true;
-                String rootClass = text(active.getClassName());
-                if (MiniProgramWindowPolicy.isMiniClass(rootClass)) windowPolicy.onWindowEvent(pkg, rootClass, id, "rootClass");
-                String title = text(w.getTitle());
-                if (MiniProgramWindowPolicy.isMiniClass(title)) windowPolicy.onWindowEvent(pkg, title, id, "windowTitleClass");
-                windowPolicy.onFocusedWindow(pkg, id, interactive, locked);
-                return;
-            }
-        } finally { active.recycle(); }
-    }
     private void newCaptureSession() { captureSession = UUID.randomUUID().toString(); captureSequence = 0; }
+    private boolean inferForeground() {
+        usagePermission = false; screenInteractive = false; screenLocked = true; userUnlocked = false;
+        try {
+            usagePermission = UsageAccessGate.hasPermission(this);
+            UserManager user = (UserManager) getSystemService(USER_SERVICE);
+            PowerManager power = (PowerManager) getSystemService(POWER_SERVICE);
+            KeyguardManager keyguard = (KeyguardManager) getSystemService(KEYGUARD_SERVICE);
+            userUnlocked = user != null && user.isUserUnlocked();
+            screenInteractive = power != null && power.isInteractive();
+            screenLocked = keyguard == null || keyguard.isKeyguardLocked();
+            if (!usagePermission || !userUnlocked || !screenInteractive || screenLocked) return false;
+            UsageStatsManager manager = (UsageStatsManager) getSystemService(USAGE_STATS_SERVICE);
+            if (manager == null) return false;
+            long end = System.currentTimeMillis();
+            UsageEvents events = manager.queryEvents(end - 24L * 60 * 60 * 1000, end);
+            if (events == null) return false;
+            UsageForegroundPolicy inference = new UsageForegroundPolicy();
+            UsageEvents.Event event = new UsageEvents.Event();
+            while (events.hasNextEvent()) {
+                if (!events.getNextEvent(event)) return false;
+                int type = event.getEventType();
+                int action;
+                if (type == UsageEvents.Event.DEVICE_SHUTDOWN || type == UsageEvents.Event.DEVICE_STARTUP) action = UsageForegroundPolicy.RESET;
+                else if (type == UsageEvents.Event.ACTIVITY_RESUMED) action = UsageForegroundPolicy.RESUMED;
+                else if (type == UsageEvents.Event.ACTIVITY_PAUSED) action = UsageForegroundPolicy.PAUSED;
+                else if (type == UsageEvents.Event.ACTIVITY_STOPPED) action = UsageForegroundPolicy.STOPPED;
+                else continue;
+                inference.event(event.getTimeStamp(), event.getPackageName(), event.getClassName(), action);
+            }
+            return inference.canCapture(usagePermission, userUnlocked, screenInteractive, screenLocked);
+        } catch (RuntimeException e) { return false; }
+    }
     private boolean updateForeground() {
         if (!alive()) return false;
-        try { if (isRunning) inspectFocusedWindow(); } catch (RuntimeException e) { focusVerified = false; }
-        boolean now = windowPolicy.canCapture(isRunning);
-        int current = now ? windowPolicy.windowId() : -1;
-        if (foreground != now || (now && current != windowId)) {
-            if (foreground && !now) leaveScene();
-            else if (!foreground && now) { sceneEnters++; MonitorFeedback.entered(this); }
+        boolean now = isRunning && inferForeground();
+        if (foreground != now) {
+            if (foreground) leaveScene();
+            else { sceneEnters++; MonitorFeedback.entered(this); }
             newCaptureSession(); policy.invalidate();
-            foreground = now; windowId = current;
-            reason = now ? "已检测到小程序窗口，正在采集" : "等待小程序窗口事件，停止截图，旧图继续识别";
+            foreground = now;
+            reason = now ? "推断微信处于前台，正在采集" : "等待微信前台或使用情况权限，停止截图，旧图继续识别";
             lastStatus = reason; publish();
         }
-        return now && focusVerified;
+        return now;
     }
     private void schedule() {
         if (!alive()) return;
         handler.removeCallbacks(sample);
         if (!isRunning) return;
         if (capture.captureBusy()) { handler.postDelayed(sample, 1000); return; }
-        if (!foreground || !focusVerified || engine == null || !engine.canCapture()) { handler.postDelayed(sample, 1000); return; }
+        if (!foreground || engine == null || !engine.canCapture()) { handler.postDelayed(sample, 1000); return; }
         long now = SystemClock.elapsedRealtime();
         handler.postDelayed(sample, Math.max(0, Math.max(policy.next(now), nextCaptureAllowed) - now));
     }
@@ -248,59 +249,62 @@ public class FarmAccessibilityService extends AccessibilityService {
         long uptime = SystemClock.uptimeMillis(), wall = System.currentTimeMillis();
         long request = capture.beginCapture(uptime);
         if (request == 0) return;
-        int target = windowId; String session = captureSession; long sequence = ++captureSequence;
-        String method = Build.VERSION.SDK_INT >= 34 ? "window" : "display";
+        String session = captureSession; long sequence = ++captureSequence;
         policy.captured(now); armWatchdog(request, uptime);
         try {
-            if (Build.VERSION.SDK_INT >= 34) takeScreenshotOfWindow(target, mainExecutor, callback(target, session, sequence, method, request, uptime, wall));
-            else if (Build.VERSION.SDK_INT >= 30) takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, callback(target, session, sequence, method, request, uptime, wall));
+            if (Build.VERSION.SDK_INT >= 30) takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, callback(session, sequence, request, uptime, wall));
         } catch (RuntimeException e) {
             capture.endCapture(request); newCaptureSession(); errors++; reason = "截图请求失败"; lastStatus = reason; publish(); schedule();
         }
     }
     @android.annotation.TargetApi(30)
-    private TakeScreenshotCallback callback(int target, String session, long sequence, String method, long request, long requestUptime, long requestWall) {
+    private TakeScreenshotCallback callback(String session, long sequence, long request, long requestUptime, long requestWall) {
         return new TakeScreenshotCallback() {
             @Override public void onSuccess(ScreenshotResult result) {
                 HardwareBuffer buffer = result.getHardwareBuffer(); Bitmap hardware = null, copy = null;
-                boolean current = capture.captureUsable(request) && currentCapture(session, target);
+                boolean current = currentCapture(session, request);
                 try {
-                    capture.endCapture(request);
+                    if (!current) return;
                     long now = SystemClock.uptimeMillis(), wall = System.currentTimeMillis();
                     hardware = Bitmap.wrapHardwareBuffer(buffer, result.getColorSpace());
                     if (hardware == null) throw new IllegalStateException("empty screenshot");
                     copy = hardware.copy(Bitmap.Config.ARGB_8888, false);
                     if (copy == null) throw new IllegalStateException("copy failed");
                     DiskFrameStore.Frame frame = new DiskFrameStore.Frame();
-                    frame.sessionId = session; frame.captureSequence = sequence; frame.windowId = target; frame.captureMethod = method;
-                    frame.contextCertain = "window".equals(method) || current;
+                    frame.sessionId = session; frame.captureSequence = sequence; frame.windowId = -1; frame.captureMethod = "accessibility_display_usage";
+                    frame.contextCertain = true; // Usage-history inference only, not exclusive visibility.
                     frame.captureUptimeMs = FramePipeline.captureUptime(result.getTimestamp(), requestUptime, now);
                     frame.captureWallMs = FramePipeline.captureWall(result.getTimestamp(), requestUptime, requestWall, now, wall);
                     frame.width = copy.getWidth(); frame.height = copy.getHeight();
                     hardware.recycle(); hardware = null; buffer.close(); buffer = null;
+                    if (!currentCapture(session, request)) return;
                     engine(FarmAccessibilityService.this).accept(copy, frame); copy = null; screenshots++;
                 } catch (RuntimeException e) {
                     errors++;
                     if (current && alive()) { newCaptureSession(); reason = "截图保存交接失败"; lastStatus = reason; }
                 } finally {
+                    capture.endCapture(request);
                     if (hardware != null) hardware.recycle(); if (buffer != null) buffer.close(); if (copy != null) copy.recycle();
-                    if (current && alive()) { publish(); schedule(); }
+                    if (alive()) { publish(); if (isRunning) schedule(); }
                 }
             }
             @Override public void onFailure(int code) {
-                boolean current = capture.captureUsable(request) && currentCapture(session, target);
+                boolean current = currentCapture(session, request);
                 capture.endCapture(request);
                 if (current && alive()) {
                     newCaptureSession(); errors++;
                     if (code == ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT) nextCaptureAllowed = SystemClock.elapsedRealtime() + 2000;
                     reason = "截图错误代码 " + code; lastStatus = reason; publish(); schedule();
-                }
+                } else if (alive() && isRunning) { publish(); schedule(); }
             }
         };
     }
-    private boolean currentCapture(String session, int target) {
-        if (!alive() || !isRunning || !foreground || windowId != target || !captureSession.equals(session)) return false;
-        return updateForeground() && windowId == target && captureSession.equals(session);
+    private boolean currentCapture(String session, long request) {
+        if (!CaptureAdmissionPolicy.allowed(capture.captureUsable(request), alive(), isRunning,
+                foreground, session, captureSession)) return false;
+        boolean inferred = updateForeground();
+        return CaptureAdmissionPolicy.allowed(capture.captureUsable(request), alive(), isRunning,
+                inferred, session, captureSession);
     }
     private void detachListener() {
         // detach compares the listener registration epoch, not the fence's post-stop epoch.
@@ -322,15 +326,17 @@ public class FarmAccessibilityService extends AccessibilityService {
         diagnostics = "截图 " + screenshots + " · 磁盘待识别 " + p.queued + " · 失败 " + p.failedCount
                 + " · 待清理 " + p.cleanupPendingCount + " · 保留 " + p.retainedBytes + "B · 写入 " + p.writing
                 + " · 暂停原因 " + p.pauseReason + " · OCR " + p.recognizing + " · 截图错误 " + errors
-                + "\n小程序窗口 " + foreground + " · 进入/退出 " + sceneEnters + "/" + sceneExits
+                + "\n使用情况权限 " + usagePermission + " · 用户解锁 " + userUnlocked
+                + " · 屏幕开启 " + screenInteractive + " · 锁屏 " + screenLocked
+                + " · 推断微信前台 " + foreground + " · 进入/退出 " + sceneEnters + "/" + sceneExits
                 + " · 识别反馈 " + recognizedEvents + " · 新增 " + added + " · 处理失败 " + frameFailures + " · 保存失败 " + saveFailures + "\n" + reason;
         dumpSnapshot = "pid=" + Process.myPid() + " instance=" + instanceSequence + " owner=" + alive()
                 + " running=" + isRunning + " foreground=" + foreground + " captureInFlight=" + capture.captureBusy()
                 + " captureTimeout=" + capture.captureTimedOut() + " diskQueued=" + p.queued + " failed=" + p.failedCount
                 + " cleanup=" + p.cleanupPendingCount + " retained=" + p.retainedBytes + " writing=" + p.writing
                 + " pauseReason=" + p.pauseReason + " recognizing=" + p.recognizing + " errors=" + errors
-                + " lastWindowClass=" + windowPolicy.lastWindowClass() + " miniWindowId=" + windowPolicy.windowId()
-                + " positiveSource=" + windowPolicy.positiveSource();
+                + " usagePermission=" + usagePermission + " screenInteractive=" + screenInteractive
+                + " screenLocked=" + screenLocked + " userUnlocked=" + userUnlocked;
     }
     @Override protected void dump(FileDescriptor fd, PrintWriter writer, String[] args) {
         if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) writer.println(dumpSnapshot);

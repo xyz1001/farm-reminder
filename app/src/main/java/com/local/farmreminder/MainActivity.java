@@ -44,6 +44,7 @@ public class MainActivity extends Activity {
     private TextView runningLabel, captureStatus, diagnosticsText, feedback, notificationStatus, exactStatus, listTitle;
     private TextView processedCount, pendingCount, ocrState, queueDetails;
     private TextView foregroundStatus, foregroundError, monitorNotificationHint;
+    private TextView usageAccessStatus;
     private Button startButton, stopButton, retryButton, notificationButton, exactButton, clearButton;
     private Button exportButton;
     private TextView exportStatus;
@@ -120,8 +121,9 @@ public class MainActivity extends Activity {
         LinearLayout capture = card(page, 24, 0xFFE9EFE5);
         runningLabel = addText(capture, "○  监测未启动", 13, GREEN, true, 0);
         addText(capture, "记录好友农场的成熟时间", 20, INK, true, 12);
-        addText(capture, "可自行选择启用无障碍服务：读取前台窗口线索，通过本地截图识别倒计时。截图与识别结果保存在应用私有目录，不自动删除，仅手动导出。不上传、不自动点击。", 14, MUTED, false, 9);
-        addText(capture, "启用服务后，仍需手动开始监测。检测到微信小程序窗口后自动截图识别；离开小程序窗口停止截图，已保存图片继续识别。若尚未检测到窗口，请手动进入小程序；手动停止则保留队列并暂停处理。", 13, MUTED, false, 9);
+        addText(capture, "需自行开启使用情况访问权限和仅用于截图的无障碍服务，不读取节点树或监听界面事件。截图与识别结果保存在应用私有目录，不自动删除，仅手动导出，不自动上传。", 14, MUTED, false, 9);
+        addText(capture, "按使用记录判断微信前台时截取整屏；无法区分农场与聊天，切换或覆盖时可能截到其他内容。开始前请关闭敏感页面，手动进入农场。判断可能延迟，多窗口不可靠，不保证消除风控。仍需手动开始/停止；缺权限、锁屏或状态未知时不新增截图，手动停止也暂停队列处理。", 13, MUTED, false, 9);
+        usageAccessStatus = addText(capture, "使用情况访问 · 待检查", 13, GREEN, true, 9);
         captureStatus = addText(capture, "未运行", 13, INK, false, 14);
         foregroundStatus = addText(capture, "前台监测服务 · 未启动", 13, GREEN, true, 8);
         addText(capture, "监测时显示静默常驻通知，可降低被系统回收的概率，仍受系统管理。点击监测通知可返回本应用。", 12, MUTED, false, 7);
@@ -150,7 +152,7 @@ public class MainActivity extends Activity {
         });
         retryButton.setVisibility(View.GONE);
         addText(progress, "识别后的截图也会保留，用于核对；不会自动上传。请复现后停止监测并导出，避免持续占用空间。", 12, MUTED, false, 10);
-        addText(progress, "可先手动离开小程序，等待队列处理完成，再停止监测并导出。诊断包包含截图、识别文字及好友昵称等敏感信息，仅交给可信人员；请选择可信的保存位置。", 12, MUTED, false, 8);
+        addText(progress, "可先手动离开微信，确认已停止新增截图并等待队列处理完成，再停止监测并导出。诊断包包含截图、识别文字及好友昵称等敏感信息，仅交给可信人员；请选择可信的保存位置。", 12, MUTED, false, 8);
         exportButton = button(progress, "导出诊断包", false, 10, this::requestDiagnosticsExport);
         exportStatus = addText(progress, "无需启动监测或启用无障碍服务即可导出已有记录。", 12, MUTED, false, 7);
         startButton = button(capture, "检查无障碍设置", true, 16, this::requestMonitoring);
@@ -174,6 +176,7 @@ public class MainActivity extends Activity {
         });
         button(capture, "查看无障碍设置", false, 8,
                 () -> openSettings(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
+        button(capture, "设置使用情况访问权限", false, 8, this::openUsageAccessSettings);
 
         LinearLayout timing = card(page, 16, Color.WHITE);
         addText(timing, "提前多久提醒", 18, INK, true, 0);
@@ -233,6 +236,9 @@ public class MainActivity extends Activity {
         if (foregroundStartupPending || MonitorForegroundService.isActive) return;
         if (Build.VERSION.SDK_INT < 30) {
             showFeedback("此设备低于 Android 11，不支持所需的无障碍截图，无法开始监测。已有提醒仍可使用。");
+        } else if (!UsageAccessGate.hasPermission(this)) {
+            showFeedback("尚未允许使用情况访问，不能开始监测。请在系统设置中允许，返回后手动开始。");
+            openUsageAccessSettings();
         } else if (!FarmAccessibilityService.isEnabled(this)) {
             showFeedback("服务当前不可用，等待系统连接或恢复；请检查系统无障碍设置。尚未开始监测，当前状态不代表你已关闭授权。");
             openSettings(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
@@ -387,6 +393,18 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void openUsageAccessSettings() {
+        try {
+            startActivity(new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS,
+                    Uri.parse("package:" + getPackageName())));
+        } catch (ActivityNotFoundException | SecurityException | IllegalArgumentException e) {
+            try { startActivity(new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)); }
+            catch (ActivityNotFoundException | SecurityException | IllegalArgumentException ignored) {
+                showFeedback("无法打开使用情况访问设置，请在系统设置中查找“使用情况访问权限”并允许本应用。");
+            }
+        }
+    }
+
     @Override protected void onResume() {
         super.onResume();
         FarmAccessibilityService.refreshDiskProgress(this);
@@ -414,6 +432,8 @@ public class MainActivity extends Activity {
         boolean enabled = FarmAccessibilityService.isEnabled(this);
         boolean connected = FarmAccessibilityService.isConnected;
         boolean running = FarmAccessibilityService.isRunning;
+        boolean usageAllowed = UsageAccessGate.hasPermission(this);
+        usageAccessStatus.setText(usageAllowed ? "使用情况访问 · 已允许" : "使用情况访问 · 未允许，不能新增截图");
         boolean foregroundActive = MonitorForegroundService.isActive;
         String serviceError = MonitorForegroundService.lastError;
         boolean newServiceError = !blank(serviceError)
@@ -421,7 +441,7 @@ public class MainActivity extends Activity {
         if (foregroundStartupPending) {
             if (foregroundActive) {
                 foregroundStartupPending = false;
-                showFeedback(running ? "监测已开启；检测到微信小程序窗口后自动截图识别。若尚未检测到窗口，请手动进入小程序。"
+                showFeedback(running ? "监测已开启；按使用记录判断微信前台时截取整屏。请手动进入农场，避免展示敏感页面。"
                         : "前台监测服务已启动，等待监测状态更新。");
             } else if (newServiceError) {
                 foregroundStartupPending = false;
@@ -444,8 +464,9 @@ public class MainActivity extends Activity {
                 : !connected ? "等待系统连接无障碍服务；当前无法开始监测，请检查系统无障碍设置。"
                 : "无障碍服务已连接";
         runningLabel.setText(!supported ? "○  此设备不支持监测"
+                : !usageAllowed ? "○  使用情况访问未允许 · 不新增截图"
                 : !enabled || !connected ? "○  服务尚未就绪"
-                : running ? "●  监测已开启 · 离开小程序仅停截图" : "○  监测未启动 · 队列保留");
+                : running ? "●  监测已开启 · 按使用记录判断前台" : "○  监测未启动 · 队列保留");
         String status = FarmAccessibilityService.lastStatus;
         captureStatus.setText(readiness + "\n监测状态：" + monitorStatusText(status));
         OcrProgress progress = FarmAccessibilityService.getOcrProgress();
@@ -470,10 +491,11 @@ public class MainActivity extends Activity {
         String diagnostics = FarmAccessibilityService.diagnostics;
         diagnosticsText.setText(blank(diagnostics) ? "暂无诊断数据。开始后可查看截图计数、OCR 处理与拒绝原因；不展示原图或完整识别文本。" : diagnostics);
         startButton.setEnabled(supported && !running && !foregroundActive
-                && !foregroundStartupPending && (!enabled || connected));
+                && !foregroundStartupPending && (!usageAllowed || !enabled || connected));
         startButton.setAlpha(startButton.isEnabled() ? 1f : 0.55f);
         startButton.setText(!supported ? "此设备不支持监测"
-                : foregroundStartupPending ? "等待启动…" : !enabled ? "检查无障碍设置"
+                : foregroundStartupPending ? "等待启动…" : !usageAllowed ? "设置使用情况访问权限"
+                : !enabled ? "检查无障碍设置"
                 : !connected ? "等待服务连接…" : running ? "监测已开启"
                 : foregroundActive ? "前台监测服务运行中" : "开始监测");
         stopButton.setVisibility(running || foregroundActive || foregroundStartupPending ? View.VISIBLE : View.GONE);
@@ -533,8 +555,8 @@ public class MainActivity extends Activity {
         if ("WRITE_FAILED".equals(status)) return "截图保存遇到问题，暂停新增截图";
         if ("SERVICE_UNAVAILABLE".equals(status)) return "截图服务暂不可用，请检查服务连接";
         if ("NOT_FOREGROUND".equals(status)) return "停止截图，已保存图片继续识别";
-        if (status.startsWith("等待小程序窗口事件"))
-            return "等待小程序窗口；若尚未检测到窗口，请手动进入小程序。已保存图片继续识别";
+        if (status.startsWith("等待微信前台"))
+            return "等待使用记录判断微信前台；请手动进入农场。判断可能延迟，已保存图片继续识别";
         if (status.startsWith("处理完成:")) return "图片处理完成，不代表已添加提醒";
         return status;
     }
@@ -548,10 +570,12 @@ public class MainActivity extends Activity {
             return "截图服务尚未就绪 · 已保存图片保留";
         if ("STOPPED".equals(progress.pauseReason) || !running)
             return "监测已停止 · 不再截图，队列保留等待手动开始";
+        if (!UsageAccessGate.hasPermission(this))
+            return "使用情况访问未允许 · 不新增截图，已保存图片仍可处理";
         if ("NOT_FOREGROUND".equals(progress.pauseReason))
             return "当前不满足截图条件 · 停止截图，已保存图片继续识别";
         if (progress.capturePaused) return "新增截图已暂停 · 请查看监测状态，已保存图片保留";
-        return "检测到微信小程序窗口后截图 · 已保存图片按序处理";
+        return "按使用记录判断微信前台时截取整屏 · 已保存图片按序处理";
     }
 
     private void updateLeadButtons() {
