@@ -29,6 +29,8 @@ public final class OcrFrameParser {
                 .thenComparingInt(line -> line.left));
         List<Long> values = new ArrayList<>();
         StringBuilder pending = new StringBuilder();
+        OcrLine previousFragment = null;
+        boolean nearbyFragments = true;
         for (OcrLine line : ordered) {
             // Parse complete matches before interpreting any remaining fragments;
             // keep whitespace here so adjacent timers do not merge their digits.
@@ -36,26 +38,40 @@ public final class OcrFrameParser {
             addDistinct(values, inline);
             String remaining = line.text;
             if (!inline.isEmpty()) {
-                remaining = remaining.replaceAll("(?<![0-9])[0-9]+\\s*[:：]\\s*[0-9]+\\s*[:：]\\s*[0-9]+\\s*后\\s*[成戌]\\s*熟", " ");
+                remaining = remaining.replaceAll("(?<![0-9])[0-9]+\\s*[:：]\\s*[0-9]+\\s*[:：]\\s*[0-9]+\\s*后\\s*[成戌咸]\\s*熟", " ");
             }
             String text = remaining.replaceAll("\\s+", "");
             if (text.isEmpty()) continue;
             // A stage-labelled countdown is not an unlabelled maturity timer.
             if (text.contains("小叶子")) { pending.setLength(0); continue; }
-            if (text.matches("[0-9:：后成熟戌]+")) {
+            if (text.matches("[0-9:：后成熟戌咸]+")) {
                 // A complete timer starts independently. Separate digit-only OCR
                 // tokens also start anew unless a colon connects the fragments.
                 if (text.matches("[0-9]+[:：][0-9]+[:：][0-9]+.*") ||
                         pending.length() > 0 && Character.isDigit(pending.charAt(pending.length() - 1)) &&
                                 Character.isDigit(text.charAt(0))) pending.setLength(0);
+                if (pending.length() == 0) {
+                    nearbyFragments = true;
+                } else if (previousFragment != null && !nearby(previousFragment, line)) {
+                    nearbyFragments = false;
+                }
                 pending.append(text);
-                if (pending.indexOf("后成熟") >= 0 || pending.indexOf("后戌熟") >= 0) {
-                    addDistinct(values, RecognitionLogic.parseCountdowns(Collections.singletonList(pending.toString())));
+                previousFragment = line;
+                if (pending.indexOf("后成熟") >= 0 || pending.indexOf("后戌熟") >= 0 || pending.indexOf("后咸熟") >= 0) {
+                    if (pending.indexOf("后咸熟") < 0 || nearbyFragments)
+                        addDistinct(values, RecognitionLogic.parseCountdowns(Collections.singletonList(pending.toString())));
                     pending.setLength(0);
                 }
             }
         }
         return values;
+    }
+
+    private static boolean nearby(OcrLine a, OcrLine b) {
+        long height = Math.max(1L, Math.max((long) a.bottom - a.top, (long) b.bottom - b.top));
+        long horizontalGap = Math.max(0L, Math.max((long) a.left - b.right, (long) b.left - a.right));
+        long verticalGap = Math.max(0L, Math.max((long) a.top - b.bottom, (long) b.top - a.bottom));
+        return horizontalGap <= 2 * height && verticalGap <= 2 * height;
     }
 
     private static void addDistinct(List<Long> values, List<Long> additions) {

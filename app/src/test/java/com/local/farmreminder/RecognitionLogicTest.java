@@ -21,6 +21,13 @@ public class RecognitionLogicTest {
         assertNull(RecognitionLogic.parseCountdown(Collections.singletonList("发芽 01:02:03")));
         assertNull(RecognitionLogic.parseCountdown(Collections.singletonList("01:02:03后戊熟")));
     }
+    @Test public void observedXianMaturityIsNarrowlyParsed() {
+        assertEquals(Long.valueOf(23236000), RecognitionLogic.parseCountdown(Collections.singletonList("06:27:16后咸熟")));
+        for (String text : Arrays.asList("06:60:16后咸熟", "06:27:60后咸熟", "06:27:16后咸", "06:27:16咸熟", "06:27:16后下班", "后咸熟", "小叶子 06:27:16", "06:27:16后戊熟"))
+            assertNull(RecognitionLogic.parseCountdown(Collections.singletonList(text)));
+        assertNull(RecognitionLogic.parseCountdown(Arrays.asList("06:27:16", "后咸熟")));
+        assertNull(RecognitionLogic.parseCountdown(Collections.singletonList("小叶子 06:27:16后咸熟")));
+    }
     @Test public void neverJoinRegions() {
         assertNull(RecognitionLogic.parseCountdown(Arrays.asList("05:32:03", "后成熟")));
         assertNull(RecognitionLogic.parseCountdown(Arrays.asList("05:32", ":03后成熟")));

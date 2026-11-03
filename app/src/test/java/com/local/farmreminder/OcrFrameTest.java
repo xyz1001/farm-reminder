@@ -81,6 +81,17 @@ public class OcrFrameTest {
         assertEquals(Arrays.asList(0L, 3723000L), OcrFrameParser.countdowns(Arrays.asList(line("0:0:0后成熟",1,10,100,20),line("1:2:03后成熟",1,40,100,50),line("1:2:03后成熟",1,60,100,70))));
         assertEquals(Arrays.asList(19923000L), OcrFrameParser.countdowns(Arrays.asList(line("小叶子:01:40:41",1,10,100,20),line("05:32",1,30,100,40),line(":03",1,80,100,90),line("后",1,130,100,140),line("成熟",1,180,100,190))));
     }
+    @Test public void xianMaturityWholeSplitAndNegativeCases() {
+        assertEquals(Long.valueOf(23236000), OcrFrameParser.countdown(Arrays.asList(line("06:27:16后咸熟",300,700,530,730))));
+        assertEquals(Long.valueOf(23236000), OcrFrameParser.countdown(Arrays.asList(line("06:27:16",300,700,450,730), line("后咸熟",455,700,530,730))));
+        assertEquals(Long.valueOf(23236000), OcrFrameParser.countdown(Arrays.asList(line("06:27:16",300,700,450,730), line("后",455,700,470,730), line("咸熟",475,700,530,730))));
+        assertEquals(Arrays.asList(23236000L, 23237000L), OcrFrameParser.countdowns(Arrays.asList(line("06:27:16后咸熟 06:27:17后成熟",300,700,700,730))));
+        assertNull(OcrFrameParser.countdown(Arrays.asList(line("06:27:16",100,700,250,730),line("后咸熟",600,1200,700,1230))));
+        assertNull(OcrFrameParser.countdown(Arrays.asList(line("小叶子 06:27:16",100,700,300,730),line("后咸熟",310,700,380,730))));
+        assertNull(OcrFrameParser.countdown(Arrays.asList(line("小叶子 06:27:16后咸熟",100,700,380,730))));
+        for (String text : Arrays.asList("06:60:16后咸熟", "06:27:60后咸熟", "06:27:16后下班", "后咸熟", "06:27:16咸熟", "小叶子 06:27:16"))
+            assertNull(OcrFrameParser.countdown(Arrays.asList(line(text,300,700,530,730))));
+    }
     @Test public void numericNamesAndCountersDoNotPolluteTimers() {
         OcrLine name = line("123", 10, 10, 60, 20);
         OcrLine level = line("148", 70, 10, 120, 20);
