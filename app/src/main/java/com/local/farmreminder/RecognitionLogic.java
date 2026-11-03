@@ -7,7 +7,7 @@ import java.util.regex.Pattern;
 
 /** Pure, conservative parsing and temporal confirmation. One string is one OCR line. */
 public final class RecognitionLogic {
-    private static final Pattern MATURITY = Pattern.compile("(?<![0-9])([0-9]+)\\s*[:：]\\s*([0-9]+)\\s*[:：]\\s*([0-9]+)\\s*后\\s*成\\s*熟");
+    private static final Pattern MATURITY = Pattern.compile("(?<![0-9])([0-9]+)\\s*[:：]\\s*([0-9]+)\\s*[:：]\\s*([0-9]+)\\s*后\\s*[成戌]\\s*熟");
     private String candidateFriend;
     private long candidateMaturity;
     private int count;

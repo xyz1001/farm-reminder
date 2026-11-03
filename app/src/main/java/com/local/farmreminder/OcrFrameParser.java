@@ -10,30 +10,12 @@ public final class OcrFrameParser {
     private OcrFrameParser() { }
 
     public static String friend(List<OcrLine> lines, int width, int height) {
-        String best = null;
-        boolean bestExplicit = false;
-        double bestScore = Double.POSITIVE_INFINITY;
-        for (OcrLine line : lines) {
-            String text = line.text.trim();
-            String compact = text.replaceAll("\\s+", "");
-            if (compact.isEmpty() || compact.matches("[0-9:：]+") && compact.matches(".*[:：].*") ||
-                    compact.equals("后成熟") ||
-                    compact.matches("[0-9:：]+后成熟")) continue;
-            boolean prefix = text.matches("^好友\\s*[:：].*");
-            boolean suffix = text.endsWith("的农场");
-            String name = text.replaceFirst("^好友\\s*[:：]\\s*", "").replaceFirst("的农场$", "").trim();
-            if (name.isEmpty()) continue;
-            boolean explicit = prefix || suffix;
-            // Geometry ranks candidates; it never excludes one.
-            double score = (double) line.top / Math.max(1, height) +
-                    (double) line.left / Math.max(1, width) * .1;
-            if (best == null || explicit && !bestExplicit || explicit == bestExplicit && score < bestScore) {
-                best = name;
-                bestExplicit = explicit;
-                bestScore = score;
-            }
-        }
-        return best;
+        return FriendNameResolver.resolve(lines, width, height).text;
+    }
+
+    public static String reminderName(List<OcrLine> lines, int width, int height) {
+        String name = friend(lines, width, height);
+        return name == null || name.trim().isEmpty() ? "昵称未识别" : name;
     }
 
     public static Long countdown(List<OcrLine> lines) {
@@ -54,20 +36,20 @@ public final class OcrFrameParser {
             addDistinct(values, inline);
             String remaining = line.text;
             if (!inline.isEmpty()) {
-                remaining = remaining.replaceAll("(?<![0-9])[0-9]+\\s*[:：]\\s*[0-9]+\\s*[:：]\\s*[0-9]+\\s*后\\s*成\\s*熟", " ");
+                remaining = remaining.replaceAll("(?<![0-9])[0-9]+\\s*[:：]\\s*[0-9]+\\s*[:：]\\s*[0-9]+\\s*后\\s*[成戌]\\s*熟", " ");
             }
             String text = remaining.replaceAll("\\s+", "");
             if (text.isEmpty()) continue;
             // A stage-labelled countdown is not an unlabelled maturity timer.
             if (text.contains("小叶子")) { pending.setLength(0); continue; }
-            if (text.matches("[0-9:：后成熟]+")) {
+            if (text.matches("[0-9:：后成熟戌]+")) {
                 // A complete timer starts independently. Separate digit-only OCR
                 // tokens also start anew unless a colon connects the fragments.
                 if (text.matches("[0-9]+[:：][0-9]+[:：][0-9]+.*") ||
                         pending.length() > 0 && Character.isDigit(pending.charAt(pending.length() - 1)) &&
                                 Character.isDigit(text.charAt(0))) pending.setLength(0);
                 pending.append(text);
-                if (pending.indexOf("后成熟") >= 0) {
+                if (pending.indexOf("后成熟") >= 0 || pending.indexOf("后戌熟") >= 0) {
                     addDistinct(values, RecognitionLogic.parseCountdowns(Collections.singletonList(pending.toString())));
                     pending.setLength(0);
                 }

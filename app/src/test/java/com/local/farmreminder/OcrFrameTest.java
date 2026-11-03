@@ -35,6 +35,44 @@ public class OcrFrameTest {
         assertEquals("!", OcrFrameParser.friend(Arrays.asList(line("其他",100,100,200,130), line("好友:!",700,1700,800,1730)),895,2000));
         assertNull(OcrFrameParser.friend(Arrays.asList(line("05:32:03",100,700,250,730),line("后成熟",600,1200,700,1230)),895,2000));
     }
+    @Test public void missingHeaderNameDoesNotUseExperienceOrOtherFriend() {
+        assertNull(OcrFrameParser.friend(Arrays.asList(
+                line("e169 78万/194万",113,233,405,278),
+                line("回家",1000,2200,1100,2250),
+                line("其他好友",200,2500,400,2540)),1240,2772));
+    }
+    @Test public void unknownNamePreservesMaturity() {
+        List<OcrLine> lines = Arrays.asList(line("78万/194万",113,233,405,278),
+                line("回家",1000,2200,1100,2250),line("00:17:13后戌熟",386,1567,625,1598));
+        assertEquals("昵称未识别", OcrFrameParser.reminderName(lines,1240,2772));
+        assertEquals(Long.valueOf(1033000), OcrFrameParser.countdown(lines));
+        assertEquals("昵称", OcrFrameParser.reminderName(Arrays.asList(line("昵称",198,191,407,233)),1240,2772));
+        FrameTransaction.State state = new FrameTransaction.State();
+        FrameTransaction.Adapter adapter = new FrameTransaction.Adapter() {
+            public boolean repair() { return true; }
+            public FrameTransaction.State read() { return state; }
+            public boolean write(FrameTransaction.State next) { return true; }
+        };
+        FrameTransaction.Result result = FrameTransaction.commit(adapter, "frame", "session", 1, 1, 1000, 1000,
+                OcrFrameParser.reminderName(lines,1240,2772), OcrFrameParser.countdowns(lines), 60);
+        assertTrue(result.committed); assertTrue(result.added); assertEquals("昵称未识别", result.reminder.friend);
+        assertEquals(1034000L, result.reminder.matureAt);
+        FrameTransaction.Result duplicate = FrameTransaction.commit(adapter, "frame2", "session", 1, 2, 1000, 1000,
+                OcrFrameParser.reminderName(lines,1240,2772), OcrFrameParser.countdowns(lines), 60);
+        assertTrue(duplicate.committed); assertEquals("DUPLICATE", duplicate.code);
+    }
+    @Test public void observedMaturityConfusionInWholeAndSplitLines() {
+        for (String time : Arrays.asList("07:51:43", "06:42:15", "07:01:45", "00:17:13")) {
+            Long expected = RecognitionLogic.parseCountdown(Arrays.asList(time + "后成熟"));
+            assertEquals(expected, OcrFrameParser.countdown(Arrays.asList(line(time + " 后戌熟",386,1567,625,1598))));
+            assertEquals(expected, OcrFrameParser.countdown(Arrays.asList(line(time,1,10,100,20),line("后",1,30,20,40),line("戌熟",1,50,30,60))));
+            assertEquals(expected, OcrFrameParser.countdown(Arrays.asList(line(time,1,10,100,20),line("后戌",1,30,30,40),line("熟",1,50,20,60))));
+        }
+        assertEquals(Arrays.asList(3723000L, 0L, 7384000L), OcrFrameParser.countdowns(Arrays.asList(
+                line("1:02:03后戌熟 0:0:0后成熟",1,10,300,30),line("2:03:04后戌熟",1,50,200,70))));
+        assertTrue(OcrFrameParser.countdowns(Arrays.asList(line("发芽 01:02:03",1,10,200,30), line("小叶子 01:02:03",1,50,200,70))).isEmpty());
+        assertNull(OcrFrameParser.friend(Arrays.asList(line("07:51:43 后戌熟",1,10,200,30)),1240,2772));
+    }
     @Test public void splitLinesAndMultipleMaturities() {
         assertEquals(Long.valueOf(19923000), OcrFrameParser.countdown(Arrays.asList(line("05:32:03",300,700,450,730),line("后成熟",455,700,530,730))));
         assertEquals(Long.valueOf(19923000), OcrFrameParser.countdown(Arrays.asList(line("05:32:03",300,700,450,730),line("后成熟",300,733,390,763))));

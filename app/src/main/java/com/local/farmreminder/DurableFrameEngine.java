@@ -279,7 +279,7 @@ public final class DurableFrameEngine {
         boolean admitted = false;
         try {
             store.writeDiagnostic(frame, "ocr-lines.tsv", DiagnosticCodec.lines(rawLines));
-            String friend = OcrFrameParser.friend(lines, frame.width, frame.height);
+            String friend = OcrFrameParser.reminderName(lines, frame.width, frame.height);
             List<Long> countdown = OcrFrameParser.countdowns(lines);
             store.writeDiagnostic(frame, "result.properties", DiagnosticCodec.result(frame, friend, countdown, null));
             int lead = context.getSharedPreferences("settings", Context.MODE_PRIVATE).getInt("leadSeconds", 60);

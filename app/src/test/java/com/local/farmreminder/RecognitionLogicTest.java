@@ -12,6 +12,15 @@ public class RecognitionLogicTest {
         assertNull(RecognitionLogic.parseCountdown(Collections.singletonList("小叶子 01:40:46")));
         assertEquals(Long.valueOf(19923000), RecognitionLogic.parseCountdown(Collections.singletonList("05 ： 32：03 后成熟")));
     }
+    @Test public void observedMaturityCharacterConfusion() {
+        for (String time : Arrays.asList("07:51:43", "06:42:15", "07:01:45", "00:17:13")) {
+            assertEquals(RecognitionLogic.parseCountdown(Collections.singletonList(time + "后成熟")),
+                    RecognitionLogic.parseCountdown(Collections.singletonList(time + " 后戌熟")));
+            assertNotNull(RecognitionLogic.parseCountdown(Collections.singletonList(time + " 后戌熟")));
+        }
+        assertNull(RecognitionLogic.parseCountdown(Collections.singletonList("发芽 01:02:03")));
+        assertNull(RecognitionLogic.parseCountdown(Collections.singletonList("01:02:03后戊熟")));
+    }
     @Test public void neverJoinRegions() {
         assertNull(RecognitionLogic.parseCountdown(Arrays.asList("05:32:03", "后成熟")));
         assertNull(RecognitionLogic.parseCountdown(Arrays.asList("05:32", ":03后成熟")));
