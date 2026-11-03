@@ -13,14 +13,14 @@ final class TaskDumpParser {
             this.state = state; this.reason = reason; this.key = key; this.component = component;
         }
     }
-    private static final Pattern RECORD = Pattern.compile("ActivityRecord\\{([^ ]+) u(\\d+) ([^ ]+) t(\\d+)(?: [^}]*)?}");
-    private static final Pattern FOCUS = Pattern.compile("^\\s*mCurrentFocus=Window\\{([^ ]+) u(\\d+) ([^ }]+)(?: [^}]*)?}\\s*$");
-    private static final Pattern TASK = Pattern.compile("^\\s*\\* Task\\{[^ ]+ #(\\d+) ([^}]*)}\\s*$");
+    private static final Pattern RECORD = Pattern.compile("ActivityRecord\\{([^ ]+) u(\\d+) ([^ ]+) t(\\d+)(?: [^}]*)?\\}");
+    private static final Pattern FOCUS = Pattern.compile("^\\s*mCurrentFocus=Window\\{([^ ]+) u(\\d+) ([^ }]+)(?: [^}]*)?\\}\\s*$");
+    private static final Pattern TASK = Pattern.compile("^\\s*\\* Task\\{[^ ]+ #(\\d+) ([^}]*)\\}\\s*$");
     private static final Pattern DISPLAY = Pattern.compile("^Display #(\\d+) \\(activities from top to bottom\\):\\s*$");
     private static final Pattern FOCUS_DISPLAY = Pattern.compile("^\\s*Display: mDisplayId=(\\d+)(?:\\s.*)?$");
     private static final Pattern LABEL = Pattern.compile("^\\s*taskDescription: label=(null|\"[^\"]*\").*$");
     private static final Pattern COMPONENT = Pattern.compile("^\\s*mActivityComponent=([^\\s]+).*$");
-    private static final Pattern WINDOW = Pattern.compile("Window\\{([^ ]+) u(\\d+) ([^ }]+)(?: [^}]*)?}");
+    private static final Pattern WINDOW = Pattern.compile("Window\\{([^ ]+) u(\\d+) ([^ }]+)(?: [^}]*)?\\}");
     private static final Pattern STATE = Pattern.compile("^\\s*state=([^ ]+).*\\bfinishing=(true|false)(?:\\s.*)?$");
     private static final Pattern VISIBLE = Pattern.compile("^\\s*mVisibleRequested=(true|false) mVisible=(true|false)(?:\\s.*)?$");
     private static final String APPBRAND = "com.tencent.mm/com.tencent.mm.plugin.appbrand.ui.AppBrandUI";

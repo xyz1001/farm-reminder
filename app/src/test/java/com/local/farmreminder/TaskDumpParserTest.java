@@ -1,6 +1,9 @@
 package com.local.farmreminder;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import java.lang.reflect.Field;
+import java.util.regex.Pattern;
 import org.junit.Test;
 
 public class TaskDumpParserTest {
@@ -22,6 +25,25 @@ public class TaskDumpParserTest {
                 + "  mFocusedApp=ActivityRecord{rec u0 " + component + " t42}\n";
     }
     private static String target() { return fixture("com.tencent.mm/.plugin.appbrand.ui.AppBrandUI37", "\"QQ经典农场\""); }
+    @Test public void allStaticPatternsLoadAndRecordCapturesRemainStable() throws Exception {
+        int count = 0;
+        for (Field field : TaskDumpParser.class.getDeclaredFields()) {
+            if (field.getType() == Pattern.class) {
+                field.setAccessible(true);
+                assertNotNull(field.get(null));
+                count++;
+            }
+        }
+        assertEquals(10, count);
+        String s = target().replace(" t42}", " t42 extra}")
+                .replace("AppBrandUI37}", "AppBrandUI37 extra}");
+        TaskDumpParser.Result result = TaskDumpParser.parse(s);
+        assertEquals(TaskDumpParser.State.MATCH, result.state);
+        assertEquals("0:42:rec:com.tencent.mm/com.tencent.mm.plugin.appbrand.ui.AppBrandUI37", result.key);
+    }
+    @Test public void desktopWithoutCoherentForegroundIsUnknown() {
+        assertEquals(TaskDumpParser.State.UNKNOWN, TaskDumpParser.parse("ACTIVITY MANAGER ACTIVITIES\nDisplay #0 (activities from top to bottom):\n").state);
+    }
     @Test public void targetAndOtherMiniapp() {
         assertEquals(TaskDumpParser.State.MATCH, TaskDumpParser.parse(target()).state);
         assertEquals(TaskDumpParser.State.NON_MATCH, TaskDumpParser.parse(target().replace("QQ经典农场", "其他")).state);
