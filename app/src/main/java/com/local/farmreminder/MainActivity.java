@@ -67,7 +67,7 @@ public class MainActivity extends Activity {
     private LinearLayout homePage, settingsPage, toolsPage, setupPage, navigation;
     private TextView homeMode, setupProgress, setupTitle, setupDetail;
     private LinearLayout setupModes;
-    private Button setupAction, setupSkip, setupBack, setupMore;
+    private Button setupAction, notificationContinue, setupBack;
     private boolean setupVisible, reviewMode, screenBuilt;
     private String currentPage = "home";
     private SetupFlowPolicy.Step displayedStep;
@@ -284,7 +284,7 @@ public class MainActivity extends Activity {
         modeChoices = new RadioGroup(this);
         modeChoices.setOrientation(RadioGroup.VERTICAL); modeChoices.setSaveEnabled(false);
         setupModes.addView(modeChoices);
-        usageMode = modeChoice("使用情况 · 默认"); shizukuMode = modeChoice("Shizuku · Root / Shell");
+        usageMode = modeChoice("使用情况 · 默认"); shizukuMode = modeChoice("Shizuku");
         modeChoices.check(ShizukuTaskGate.isEnabled(this) ? shizukuMode.getId() : usageMode.getId());
         modeChoices.setOnCheckedChangeListener((group, id) -> {
             if (updatingMode) return;
@@ -295,10 +295,9 @@ public class MainActivity extends Activity {
         modeDescription = addText(setupModes, "", 13, MUTED, false, 8);
         shizukuStatus = addText(setupPage, "", 14, GREEN, true, 20);
         setupAction = button(setupPage, "继续", true, 24, this::performSetupAction);
-        setupMore = button(setupPage, "了解更多", false, 8, this::showPrivacy);
-        setupSkip = button(setupPage, "稍后", false, 8, () -> {
-            if (displayedStep == SetupFlowPolicy.Step.NOTIFICATIONS)
-                settings.edit().putBoolean("notificationDeferred", true).apply();
+        notificationContinue = button(setupPage, "暂不开启，继续", false, 8, () -> {
+            if (displayedStep != SetupFlowPolicy.Step.NOTIFICATIONS) return;
+            settings.edit().putBoolean("notificationDeferred", true).apply();
             reviewMode = false; backStep = null; setupVisible = false; currentPage = "home"; refresh();
         });
         setupBack = button(setupPage, "返回", false, 8, this::navigateBack);
@@ -360,15 +359,15 @@ public class MainActivity extends Activity {
             tab.setContentDescription(tab.getText() + (selected ? "，当前页面" : ""));
         }
         if (!setupVisible) return;
-        displayedStep = reviewMode ? SetupFlowPolicy.Step.MODE : backStep != null ? backStep : actual;
+        displayedStep = SetupFlowPolicy.displayedStep(actual, reviewMode, backStep);
         boolean mode = displayedStep == SetupFlowPolicy.Step.MODE;
-        boolean screenshot = displayedStep == SetupFlowPolicy.Step.SCREENSHOT || displayedStep == SetupFlowPolicy.Step.WAITING;
         setupModes.setVisibility(mode ? View.VISIBLE : View.GONE);
-        setupMore.setVisibility(mode || screenshot ? View.VISIBLE : View.GONE);
         shizukuStatus.setVisibility(displayedStep == SetupFlowPolicy.Step.SOURCE && ShizukuTaskGate.isEnabled(this)
                 ? View.VISIBLE : View.GONE);
         setupAction.setEnabled(true);
-        setupSkip.setText(displayedStep == SetupFlowPolicy.Step.NOTIFICATIONS ? "暂不开启，继续" : "稍后设置");
+        notificationContinue.setVisibility(displayedStep == SetupFlowPolicy.Step.NOTIFICATIONS
+                ? View.VISIBLE : View.GONE);
+        setupBack.setText(displayedStep == SetupFlowPolicy.Step.WAITING ? "返回截图设置" : "返回");
         switch (displayedStep) {
             case MODE:
                 setupProgress.setText("准备"); setupTitle.setText("选择监测方式");
@@ -377,24 +376,23 @@ public class MainActivity extends Activity {
                 setupProgress.setText("1 / 3");
                 if (ShizukuTaskGate.isEnabled(this)) {
                     setupTitle.setText("连接 Shizuku");
-                    setupDetail.setText("先启动 Shizuku，再点击授权；支持 Root / Shell");
+                    setupDetail.setText("先启动 Shizuku，再点击授权");
                     shizukuStatus.setText(shortShizukuStatus());
                     setupAction.setText(ShizukuTaskGate.get(this).hasPermission() ? "继续" : "授权 / 刷新");
                 } else {
-                    setupTitle.setText("允许使用情况访问");
+                    setupTitle.setText("应用使用情况权限");
                     setupDetail.setText("用于判断微信小程序是否在前台");
-                    setupAction.setText(UsageAccessGate.hasPermission(this) ? "继续" : "前往允许");
+                    setupAction.setText(UsageAccessGate.hasPermission(this) ? "继续" : "去授权");
                 }
                 break;
             case SCREENSHOT:
                 setupProgress.setText("2 / 3"); setupTitle.setText("启用截图服务");
-                setupDetail.setText("截图仅用于识别，可能包含其他内容；截图和识别文字会在本机保留，可导出。");
-                setupAction.setText(FarmAccessibilityService.isEnabled(this) ? "继续" : "前往启用"); break;
+                setupDetail.setText("整屏截图可能包含其他内容；截图和识别文字在本机保留，可导出。");
+                setupAction.setText(FarmAccessibilityService.isEnabled(this) ? "查看系统设置" : "前往启用"); break;
             case WAITING:
                 setupProgress.setText("2 / 3"); setupTitle.setText("等待截图服务连接");
                 setupDetail.setText("服务已启用，正在等待系统连接");
-                setupAction.setText("刷新连接状态");
-                setupMore.setText("查看系统设置"); break;
+                setupAction.setText("刷新"); break;
             case NOTIFICATIONS:
                 setupProgress.setText("3 / 3 · 可选"); setupTitle.setText("开启通知");
                 setupDetail.setText("用于成熟提醒和监测状态；不开启仍可监测，但提醒可能不可见。");
@@ -407,12 +405,6 @@ public class MainActivity extends Activity {
                 setupProgress.setText("已完成"); setupTitle.setText("准备就绪");
                 setupDetail.setText("返回首页后，手动开始监测"); setupAction.setText("返回首页");
         }
-        if (displayedStep != SetupFlowPolicy.Step.WAITING) setupMore.setText("了解更多");
-        setupMore.setOnClickListener(v -> {
-            if (displayedStep == SetupFlowPolicy.Step.WAITING)
-                openSettings(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
-            else showPrivacy();
-        });
     }
 
     private String shortShizukuStatus() {
@@ -436,8 +428,7 @@ public class MainActivity extends Activity {
                 } else if (!UsageAccessGate.hasPermission(this)) openUsageAccessSettings();
                 break;
             case SCREENSHOT:
-                if (!FarmAccessibilityService.isEnabled(this))
-                    openSettings(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+                openSettings(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
                 break;
             case WAITING: break; // A refresh is never an automatic trip back into settings.
             case NOTIFICATIONS: requestNotificationPermission(); break;
@@ -454,6 +445,8 @@ public class MainActivity extends Activity {
             } else if (displayedStep == SetupFlowPolicy.Step.SOURCE) {
                 reviewMode = true; backStep = null;
             } else if (displayedStep == SetupFlowPolicy.Step.NOTIFICATIONS) {
+                backStep = SetupFlowPolicy.Step.SCREENSHOT;
+            } else if (displayedStep == SetupFlowPolicy.Step.WAITING) {
                 backStep = SetupFlowPolicy.Step.SCREENSHOT;
             } else {
                 backStep = SetupFlowPolicy.Step.SOURCE;
@@ -686,7 +679,7 @@ public class MainActivity extends Activity {
         boolean usageAllowed = !useShizuku && UsageAccessGate.hasPermission(this);
         boolean sourceReady = useShizuku ? ShizukuTaskGate.get(this).hasPermission() : usageAllowed;
         modeDescription.setText(useShizuku
-                ? "识别农场系统任务；需自行启动并授权 Shizuku。权限范围更大，Root 风险更高。"
+                ? "按系统任务判断农场前台"
                 : "通过使用记录判断小程序，无法区分具体小游戏。");
         boolean foregroundActive = MonitorForegroundService.isActive;
         String serviceError = MonitorForegroundService.lastError;
@@ -712,12 +705,14 @@ public class MainActivity extends Activity {
         boolean modeEditable = canChangeMode();
         usageMode.setEnabled(modeEditable);
         shizukuMode.setEnabled(modeEditable);
-        modeHint.setText(modeEditable ? "选择后不会自动开始监测" : "请先停止监测，再切换模式");
+        modeHint.setText(!modeEditable ? "请先停止监测，再切换模式" : useShizuku
+                ? "选择后不会自动开始监测"
+                : "应用使用情况权限 · " + (usageAllowed ? "已授权" : "未授权"));
         boolean hasForegroundError = !foregroundActive && !foregroundStartupPending
                 && (foregroundRequestFailed || !blank(serviceError));
         foregroundError.setVisibility(hasForegroundError ? View.VISIBLE : View.GONE);
         foregroundError.setText("前台监测启动或运行遇到问题，请检查无障碍服务连接及系统设置后重试。");
-        homeMode.setText(useShizuku ? "Shizuku · Root / Shell" : "使用情况模式");
+        homeMode.setText(useShizuku ? "Shizuku" : "使用情况模式");
         boolean requiredReady = supported && sourceReady && enabled && connected;
         runningLabel.setText(!supported ? "设备暂不支持" : foregroundStartupPending ? "正在启动"
                 : !requiredReady ? "需要完成设置" : running ? "监测中" : foregroundActive ? "正在停止" : "准备就绪");

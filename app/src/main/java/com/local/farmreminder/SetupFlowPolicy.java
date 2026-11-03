@@ -22,6 +22,13 @@ final class SetupFlowPolicy {
         return step == Step.READY || step == Step.NOTIFICATIONS;
     }
 
+    static Step displayedStep(Step actual, boolean reviewMode, Step backStep) {
+        if (reviewMode) return Step.MODE;
+        // Returning to a later page must never hide a revoked source permission.
+        if (actual == Step.SOURCE) return Step.SOURCE;
+        return backStep != null ? backStep : actual;
+    }
+
     static boolean canChangeMode(boolean running, boolean serviceActive, boolean startPending) {
         return !running && !serviceActive && !startPending;
     }

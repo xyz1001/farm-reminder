@@ -14,6 +14,39 @@ public class SetupFlowPolicyTest {
         assertEquals(READY, next(true, false, true, false, true, true, true, false));
     }
 
+    @Test public void chosenUsageModeCannotUseOldCaptureSetupToSkipMissingUsagePermission() {
+        // An existing enabled/connected screenshot service is not usage authorization.
+        assertEquals(SOURCE, next(true, false, false, true, true, true, true, true));
+        assertEquals(SOURCE, next(true, false, false, false, false, false, false, false));
+        // A legacy installation without modeChosen first confirms the mode, then needs SOURCE.
+        assertEquals(MODE, next(false, false, false, true, true, true, true, true));
+        assertEquals(SOURCE, next(true, false, false, true, true, true, true, true));
+    }
+
+    @Test public void returningWithoutUsageGrantNeverAdvancesOrEmitsAnAction() {
+        for (int i = 0; i < 3; i++) {
+            SetupFlowPolicy.Step actual = next(true, false, false, true, true, true, true, true);
+            assertEquals(SOURCE, actual);
+            assertEquals(SOURCE, SetupFlowPolicy.displayedStep(actual, false, SCREENSHOT));
+            assertEquals(SOURCE, SetupFlowPolicy.displayedStep(actual, false, NOTIFICATIONS));
+            assertEquals(MODE, SetupFlowPolicy.displayedStep(actual, true, SCREENSHOT));
+            // Leaving mode review must expose the real missing permission again.
+            assertEquals(SOURCE, SetupFlowPolicy.displayedStep(actual, false, null));
+            assertFalse(SetupFlowPolicy.requiredReady(actual));
+        }
+    }
+
+    @Test public void grantedUsageSkipsSourceAndShizukuNeverNeedsUsage() {
+        assertEquals(SCREENSHOT, next(true, false, true, false, false, false, false, false));
+        assertEquals(SCREENSHOT, next(true, true, false, true, false, false, false, false));
+        assertEquals(READY, next(true, true, false, true, true, true, false, true));
+    }
+
+    @Test public void waitingCanReturnToScreenshotSettingsWithoutChangingRequiredState() {
+        assertEquals(SCREENSHOT, SetupFlowPolicy.displayedStep(WAITING, false, SCREENSHOT));
+        assertEquals(WAITING, SetupFlowPolicy.displayedStep(WAITING, false, null));
+    }
+
     @Test public void shizukuDoesNotNeedUsageAccessAndAcceptsEitherGrantedIdentity() {
         assertEquals(READY, next(true, true, false, true, true, true, true, false));
         assertEquals(SOURCE, next(true, true, true, false, true, true, true, false));
