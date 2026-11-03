@@ -2,14 +2,15 @@ package com.local.farmreminder;
 
 import java.util.List;
 
-/** Conservative, local-only identity check; OCR text without a valid box is ignored. */
+/** Local-only identity check; OCR text without a valid box is ignored. */
 final class FarmIdentityRecognition {
     enum Outcome { LOADING, HOME, NO_MATCH }
+    private static final String[] MENU_WORDS = {"仓库", "商店", "宠物", "图鉴", "装扮", "好友"};
 
     static Outcome classify(List<OcrLine> lines, int width, int height) {
         if (lines == null || width <= 0 || height <= 0) return Outcome.NO_MATCH;
         boolean fullLogo = false, logo = false, help = false, percent = false;
-        boolean warehouse = false, shop = false, pet = false, otherFarm = false;
+        boolean[] menuWords = new boolean[MENU_WORDS.length];
         for (OcrLine line : lines) {
             if (line == null || line.left < 0 || line.top < 0 || line.right <= line.left
                     || line.bottom <= line.top || line.right > width || line.bottom > height) continue;
@@ -26,21 +27,15 @@ final class FarmIdentityRecognition {
                 try { percent = Double.parseDouble(text.substring(0, text.length() - 1)) <= 100; }
                 catch (NumberFormatException ignored) { }
             }
-            if (text.contains("回家") || text.contains("好友家")) otherFarm = true;
-            if (y >= .9) {
-                if (x < .25 && text.equals("仓库")) warehouse = true;
-                if (x >= .15 && x <= .4 && text.equals("商店")) shop = true;
-                if (x >= .3 && x <= .55 && text.equals("宠物")) pet = true;
-                if ((double) line.left / width >= .15 && (double) line.right / width <= .55
-                        && (text.equals("商店宠物") || text.equals("商店(宠物")
-                        || text.equals("商店（宠物"))) {
-                    shop = true;
-                    pet = true;
-                }
+            for (int i = 0; i < MENU_WORDS.length; i++) {
+                String menuText = i == MENU_WORDS.length - 1 ? text.replace("好友家", "\0") : text;
+                if (menuText.contains(MENU_WORDS[i])) menuWords[i] = true;
             }
         }
         if (fullLogo || (logo && (help || percent))) return Outcome.LOADING;
-        if (!otherFarm && warehouse && shop && pet) return Outcome.HOME;
+        int count = 0;
+        for (boolean found : menuWords) if (found) count++;
+        if (count >= 3) return Outcome.HOME;
         return Outcome.NO_MATCH;
     }
 
