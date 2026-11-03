@@ -4,7 +4,7 @@ import java.io.StringReader;
 import java.io.StringWriter;
 import java.util.Properties;
 
-/** Capture-time confirmation, independent of OCR completion time. */
+/** Legacy checkpoint serialization; each observation is independently confirmed. */
 final class FrameCommitPolicy {
     static final class Checkpoint {
         String frameId, sessionId, friend;
@@ -35,15 +35,10 @@ final class FrameCommitPolicy {
     }
     static Checkpoint reduce(Checkpoint previous, String id, String session, int window, long sequence,
                              long uptime, long wall, String friend, Long countdown) {
-        if (id == null || id.isEmpty() || session == null || session.isEmpty() || sequence <= 0 || uptime < 0 || wall < 0) throw new IllegalArgumentException("invalid frame");
         Checkpoint c = new Checkpoint(); c.frameId = id; c.sessionId = session; c.windowId = window;
         c.sequence = sequence; c.uptime = uptime; c.friend = "";
-        if (friend == null || friend.trim().isEmpty() || countdown == null || countdown <= 0 || wall > Long.MAX_VALUE - countdown) return c;
-        c.friend = friend.trim(); c.maturity = wall + countdown; c.count = 1;
-        if (previous != null && previous.count > 0 && session.equals(previous.sessionId) && window == previous.windowId
-                && previous.sequence != Long.MAX_VALUE && sequence == previous.sequence + 1
-                && uptime >= previous.uptime && uptime - previous.uptime <= 5000
-                && c.friend.equals(previous.friend) && Math.abs(c.maturity - previous.maturity) <= 5000) c.count = 2;
+        if (friend == null || friend.trim().isEmpty() || countdown == null || countdown < 0 || wall > Long.MAX_VALUE - countdown) return c;
+        c.friend = friend.trim(); c.maturity = wall + countdown; c.count = 2;
         return c;
     }
 

@@ -208,7 +208,6 @@ public final class DurableFrameEngine {
             frame = store.claimNext();
             if (frame == null) { finishFrame(); return; }
             if (!fence.valid(token)) { returnPending(frame); finishFrame(); return; }
-            if (!frame.contextCertain) { fail(frame, "CONTEXT_UNCERTAIN", token, false); finishFrame(); return; }
         } catch (Exception e) { storageError(token); finishFrame(); return; }
         final Bitmap bitmap = decode(store.image(frame));
         if (bitmap == null) { fail(frame, "DECODE_FAILED", token, false); finishFrame(); return; }
@@ -262,13 +261,13 @@ public final class DurableFrameEngine {
         boolean admitted = false;
         try {
             String friend = OcrFrameParser.friend(lines, frame.width, frame.height);
-            Long countdown = OcrFrameParser.countdown(lines);
+            List<Long> countdown = OcrFrameParser.countdowns(lines);
             int lead = context.getSharedPreferences("settings", Context.MODE_PRIVATE).getInt("leadSeconds", 60);
             admitted = fence.tryAdmitTransaction(token);
             if (!admitted) { returnPending(frame); return; }
             ReminderStore.FrameOutcome outcome = reminders.commitFrame(frame, friend, countdown, lead);
             if (!outcome.committed) { fail(frame, "BUSINESS_FAILED", token, true); return; }
-            if (outcome.reminder != null) try { new AlarmScheduler(context).schedule(outcome.reminder); } catch (RuntimeException ignored) { }
+            for (Reminder reminder : outcome.reminders) try { new AlarmScheduler(context).schedule(reminder); } catch (RuntimeException ignored) { }
             store.acknowledge(frame);
             reminders.forgetFrameReceipt(frame.id);
             try { store.cleanup(frame); } catch (IOException ignored) { }

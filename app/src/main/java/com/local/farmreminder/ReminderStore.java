@@ -71,9 +71,11 @@ public class ReminderStore {
 
     static final class FrameOutcome {
         final boolean committed, replay, confirmed, added;
-        final Reminder reminder; final String code;
-        FrameOutcome(boolean committed, boolean replay, boolean confirmed, boolean added, Reminder reminder, String code) {
-            this.committed = committed; this.replay = replay; this.confirmed = confirmed; this.added = added; this.reminder = reminder; this.code = code;
+        final Reminder reminder; final List<Reminder> reminders; final String code;
+        FrameOutcome(boolean committed, boolean replay, boolean confirmed, boolean added, List<Reminder> reminders, String code) {
+            this.committed = committed; this.replay = replay; this.confirmed = confirmed; this.added = added;
+            this.reminders = java.util.Collections.unmodifiableList(new ArrayList<>(reminders));
+            this.reminder = reminders.isEmpty() ? null : reminders.get(0); this.code = code;
         }
     }
     private static Reminder makeReminder(String friend, long maturity, int leadSeconds) {
@@ -98,14 +100,20 @@ public class ReminderStore {
                 FrameTransaction.State state = new FrameTransaction.State(); state.items.addAll(readStrict());
                 JSONObject receipts = readReceipts(); java.util.Iterator<String> keys = receipts.keys();
                 while (keys.hasNext()) { String id = keys.next(); JSONObject r = receipts.getJSONObject(id);
-                    state.receipts.put(id, new FrameTransaction.Receipt(r.getString("code"), r.getString("reminderId"))); }
-                state.checkpoint = FrameCommitPolicy.Checkpoint.decode(prefs.getString(CHECKPOINT, null));
+                    JSONArray ids = r.optJSONArray("reminderIds");
+                    if (ids == null) state.receipts.put(id, new FrameTransaction.Receipt(r.getString("code"), r.getString("reminderId")));
+                    else { List<String> values = new ArrayList<>(); for (int i = 0; i < ids.length(); i++) values.add(ids.getString(i));
+                        state.receipts.put(id, new FrameTransaction.Receipt(r.getString("code"), values)); }
+                }
+                // A stale or corrupt legacy checkpoint must not prevent a new frame from committing.
+                try { state.checkpoint = FrameCommitPolicy.Checkpoint.decode(prefs.getString(CHECKPOINT, null)); } catch (Exception ignored) { }
                 return state;
             }
             public boolean write(FrameTransaction.State state) throws Exception {
                 JSONObject receipts = new JSONObject();
                 for (java.util.Map.Entry<String, FrameTransaction.Receipt> entry : state.receipts.entrySet()) {
                     JSONObject value = new JSONObject(); value.put("code", entry.getValue().code); value.put("reminderId", entry.getValue().reminderId);
+                    value.put("reminderIds", new JSONArray(entry.getValue().reminderIds));
                     receipts.put(entry.getKey(), value);
                 }
                 String items = serialize(state.items), checkpoint = state.checkpoint == null ? null : state.checkpoint.encode();
@@ -116,11 +124,14 @@ public class ReminderStore {
         };
     }
     FrameOutcome commitFrame(DiskFrameStore.Frame frame, String friend, Long countdownMs, int leadSeconds) {
+        return commitFrame(frame, friend, countdownMs == null ? java.util.Collections.emptyList() : java.util.Collections.singletonList(countdownMs), leadSeconds);
+    }
+    FrameOutcome commitFrame(DiskFrameStore.Frame frame, String friend, List<Long> countdownMs, int leadSeconds) {
         synchronized (LOCK) {
-            if (frame == null) return new FrameOutcome(false, false, false, false, null, "STORAGE_FAILED");
+            if (frame == null) return new FrameOutcome(false, false, false, false, java.util.Collections.emptyList(), "STORAGE_FAILED");
             FrameTransaction.Result r = FrameTransaction.commit(frameAdapter(), frame.id, frame.sessionId, frame.windowId,
                     frame.captureSequence, frame.captureUptimeMs, frame.captureWallMs, friend, countdownMs, leadSeconds);
-            return new FrameOutcome(r.committed, r.replay, r.confirmed, r.added, r.reminder, r.code);
+            return new FrameOutcome(r.committed, r.replay, r.confirmed, r.added, r.reminders, r.code);
         }
     }
     boolean forgetFrameReceipt(String frameId) { synchronized (LOCK) {

@@ -7,7 +7,7 @@ public class Reminder {
 
     /** Returns zero when no alarm should be scheduled. */
     static long scheduledTime(Reminder reminder, long now) {
-        if (reminder.fired || reminder.matureAt <= now) return 0;
-        return reminder.triggerAt > now ? reminder.triggerAt : now + 1000L;
+        if (reminder.fired) return 0;
+        return reminder.matureAt > now && reminder.triggerAt > now ? reminder.triggerAt : now + 1000L;
     }
 }

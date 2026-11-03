@@ -15,7 +15,9 @@ public class RecognitionLogicTest {
     @Test public void neverJoinRegions() {
         assertNull(RecognitionLogic.parseCountdown(Arrays.asList("05:32:03", "后成熟")));
         assertNull(RecognitionLogic.parseCountdown(Arrays.asList("05:32", ":03后成熟")));
-        assertNull(RecognitionLogic.parseCountdown(Arrays.asList("05:32:03后成熟", "05:31:05后成熟")));
+        assertEquals(Long.valueOf(19923000), RecognitionLogic.parseCountdown(Arrays.asList("05:32:03后成熟", "05:31:05后成熟")));
+        assertEquals(Long.valueOf(3723000), RecognitionLogic.parseCountdown(Collections.singletonList("1:2:03后成熟")));
+        assertEquals(Long.valueOf(0), RecognitionLogic.parseCountdown(Collections.singletonList("0:0:0后成熟")));
     }
     @Test public void confirmationAndSwitch() {
         RecognitionLogic logic = new RecognitionLogic();

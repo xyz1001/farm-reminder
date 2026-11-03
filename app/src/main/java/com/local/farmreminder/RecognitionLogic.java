@@ -1,27 +1,34 @@
 package com.local.farmreminder;
 
 import java.util.List;
+import java.util.ArrayList;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /** Pure, conservative parsing and temporal confirmation. One string is one OCR line. */
 public final class RecognitionLogic {
-    private static final Pattern MATURITY = Pattern.compile("(?<![0-9])([0-9]{1,2})\\s*[:：]\\s*([0-9]{2})\\s*[:：]\\s*([0-9]{2})\\s*后\\s*成\\s*熟");
+    private static final Pattern MATURITY = Pattern.compile("(?<![0-9])([0-9]+)\\s*[:：]\\s*([0-9]+)\\s*[:：]\\s*([0-9]+)\\s*后\\s*成\\s*熟");
     private String candidateFriend;
     private long candidateMaturity;
     private int count;
 
     public static Long parseCountdown(List<String> lines) {
-        Long found = null;
+        List<Long> found = parseCountdowns(lines);
+        return found.isEmpty() ? null : found.get(0);
+    }
+
+    public static List<Long> parseCountdowns(List<String> lines) {
+        List<Long> found = new ArrayList<>();
         for (String line : lines) {
             if (line == null) continue;
             Matcher m = MATURITY.matcher(line);
             while (m.find()) {
-                int h = Integer.parseInt(m.group(1)), min = Integer.parseInt(m.group(2)), sec = Integer.parseInt(m.group(3));
-                if (min >= 60 || sec >= 60) continue;
-                long value = (h * 3600L + min * 60L + sec) * 1000L;
-                if (found != null && found != value) return null;
-                found = value;
+                try {
+                    long h = Long.parseLong(m.group(1)), min = Long.parseLong(m.group(2)), sec = Long.parseLong(m.group(3));
+                    if (min >= 60 || sec >= 60) continue;
+                    long value = Math.multiplyExact(Math.addExact(Math.addExact(Math.multiplyExact(h, 3600L), min * 60L), sec), 1000L);
+                    if (!found.contains(value)) found.add(value);
+                } catch (NumberFormatException | ArithmeticException ignored) { }
             }
         }
         return found;

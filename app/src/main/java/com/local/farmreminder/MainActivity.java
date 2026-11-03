@@ -207,7 +207,7 @@ public class MainActivity extends Activity {
         reminders = column();
         page.addView(reminders, spaced(-1, -2, 4));
         addText(page, "识别规则", 14, INK, true, 25);
-        addText(page, "只识别明确标注“后成熟”的倒计时，忽略生长阶段倒计时；好友或时间不确定时不录入。请核对记录的成熟时间。", 13, MUTED, false, 7);
+        addText(page, "单张截图识别到名称和“后成熟”时间即添加提醒；生长阶段倒计时不作为成熟时间。请核对记录。", 13, MUTED, false, 7);
         addText(page, "仅在本机处理画面，不上传数据。不会自动点击微信或操作游戏，不需要悬浮窗权限。", 12, MUTED, false, 12);
     }
 
@@ -399,7 +399,7 @@ public class MainActivity extends Activity {
         if (items.isEmpty()) {
             LinearLayout empty = card(reminders, 10, 0xFFEDEFE6);
             addText(empty, "还没有成熟提醒", 17, INK, true, 0);
-            addText(empty, "开始监测后，在微信打开好友农场。识别并确认好友和成熟倒计时后，记录会出现在这里。", 14, MUTED, false, 9);
+            addText(empty, "开始监测后，在微信打开好友农场。单张截图识别到名称和“后成熟”时间，提醒就会出现在这里。", 14, MUTED, false, 9);
             return;
         }
         SimpleDateFormat date = new SimpleDateFormat("yyyy年M月d日 HH:mm:ss", Locale.CHINA);
