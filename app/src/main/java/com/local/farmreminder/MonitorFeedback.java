@@ -16,7 +16,7 @@ public final class MonitorFeedback {
 
     private static Toast activeToast;
     private static Runnable pendingRecognition;
-    private static Boolean insideFarm;
+    private static Boolean insideMiniProgram;
     private static boolean processingActive;
     // Written only on the main thread; dispatch may read it from a worker.
     private static volatile long processingEpoch;
@@ -31,7 +31,7 @@ public final class MonitorFeedback {
             processingEpoch++;
             processingActive = active;
             cancelRecognition();
-            insideFarm = null;
+            insideMiniProgram = null;
             lastRecognizedAt = -REPEAT_WINDOW_MS;
             lastAddedAt = -REPEAT_WINDOW_MS;
             lastFailedAt = -REPEAT_WINDOW_MS;
@@ -79,14 +79,14 @@ public final class MonitorFeedback {
             case ENTERED:
             case EXITED:
                 boolean entered = event == Event.ENTERED;
-                if (insideFarm != null && insideFarm.booleanValue() == entered) return;
-                insideFarm = entered;
+                if (insideMiniProgram != null && insideMiniProgram.booleanValue() == entered) return;
+                insideMiniProgram = entered;
                 cancelRecognition();
                 lastRecognizedAt = -REPEAT_WINDOW_MS;
                 lastAddedAt = -REPEAT_WINDOW_MS;
                 lastFailedAt = -REPEAT_WINDOW_MS;
                 // Boundaries are immediate, never throttled by recognition feedback.
-                show(app, entered ? "已进入农场，开始识别" : "离开农场，停止截图；队列继续识别");
+                show(app, entered ? "小程序窗口已进入，开始识别" : "已离开小程序，停止截图；队列继续识别");
                 break;
             case RECOGNIZED:
                 if (now - lastRecognizedAt < REPEAT_WINDOW_MS) return;

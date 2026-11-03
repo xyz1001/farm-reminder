@@ -107,7 +107,7 @@ public class MainActivity extends Activity {
         runningLabel = addText(capture, "○  监测未启动", 13, GREEN, true, 0);
         addText(capture, "记录好友农场的成熟时间", 20, INK, true, 12);
         addText(capture, "可自行选择启用无障碍服务：读取前台窗口线索，通过本地截图识别倒计时。截图暂存应用私有目录，成功处理后删除，失败保留。不上传、不自动点击。", 14, MUTED, false, 9);
-        addText(capture, "启用服务后，仍需手动开始监测。离开微信停止截图，已保存图片可继续识别；手动停止则保留队列并暂停处理。小游戏窗口身份待验证，可能需要少量画面探测。", 13, MUTED, false, 9);
+        addText(capture, "启用服务后，仍需手动开始监测。检测到微信小程序窗口后自动截图识别；离开小程序窗口停止截图，已保存图片继续识别。若尚未检测到窗口，请手动进入小程序；手动停止则保留队列并暂停处理。", 13, MUTED, false, 9);
         captureStatus = addText(capture, "未运行", 13, INK, false, 14);
         foregroundStatus = addText(capture, "前台监测服务 · 未启动", 13, GREEN, true, 8);
         addText(capture, "监测时显示静默常驻通知，可降低被系统回收的概率，仍受系统管理。点击监测通知可返回本应用。", 12, MUTED, false, 7);
@@ -317,7 +317,7 @@ public class MainActivity extends Activity {
         if (foregroundStartupPending) {
             if (foregroundActive) {
                 foregroundStartupPending = false;
-                showFeedback(running ? "监测已开启；切换到微信后按窗口线索进行监测。"
+                showFeedback(running ? "监测已开启；检测到微信小程序窗口后自动截图识别。若尚未检测到窗口，请手动进入小程序。"
                         : "前台监测服务已启动，等待监测状态更新。");
             } else if (newServiceError) {
                 foregroundStartupPending = false;
@@ -341,7 +341,7 @@ public class MainActivity extends Activity {
                 : "无障碍服务已连接";
         runningLabel.setText(!supported ? "○  此设备不支持监测"
                 : !enabled || !connected ? "○  服务尚未就绪"
-                : running ? "●  监测已开启 · 离开微信仅停截图" : "○  监测未启动 · 队列保留");
+                : running ? "●  监测已开启 · 离开小程序仅停截图" : "○  监测未启动 · 队列保留");
         String status = FarmAccessibilityService.lastStatus;
         captureStatus.setText(readiness + "\n监测状态：" + monitorStatusText(status));
         OcrProgress progress = FarmAccessibilityService.getOcrProgress();
@@ -428,6 +428,8 @@ public class MainActivity extends Activity {
         if ("WRITE_FAILED".equals(status)) return "截图保存遇到问题，暂停新增截图";
         if ("SERVICE_UNAVAILABLE".equals(status)) return "截图服务暂不可用，请检查服务连接";
         if ("NOT_FOREGROUND".equals(status)) return "停止截图，已保存图片继续识别";
+        if (status.startsWith("等待小程序窗口事件"))
+            return "等待小程序窗口；若尚未检测到窗口，请手动进入小程序。已保存图片继续识别";
         if (status.startsWith("处理完成:")) return "图片处理完成，不代表已添加提醒";
         return status;
     }
@@ -444,7 +446,7 @@ public class MainActivity extends Activity {
         if ("NOT_FOREGROUND".equals(progress.pauseReason))
             return "当前不满足截图条件 · 停止截图，已保存图片继续识别";
         if (progress.capturePaused) return "新增截图已暂停 · 请查看监测状态，已保存图片保留";
-        return "按前台场景截图 · 已保存图片按序处理";
+        return "检测到微信小程序窗口后截图 · 已保存图片按序处理";
     }
 
     private void updateLeadButtons() {
