@@ -45,12 +45,10 @@ public class MainActivity extends Activity {
     private final List<Button> leadButtons = new ArrayList<>();
     private TextView runningLabel, captureStatus, diagnosticsText, feedback, notificationStatus, exactStatus, listTitle;
     private TextView processedCount, pendingCount, ocrState, queueDetails;
-    private TextView foregroundStatus, foregroundError, monitorNotificationHint;
-    private TextView usageAccessStatus;
+    private TextView foregroundStatus, foregroundError;
     private TextView modeHint, modeDescription, shizukuStatus;
     private RadioGroup modeChoices;
     private RadioButton usageMode, shizukuMode;
-    private Button usageSettingsButton, shizukuPermissionButton;
     private boolean updatingMode;
     private Button startButton, stopButton, retryButton, notificationButton, exactButton, clearButton;
     private Button exportButton;
@@ -66,6 +64,16 @@ public class MainActivity extends Activity {
     private long foregroundStartupDeadline;
     private String foregroundErrorBeforeStart = "";
     private String listSignature = "";
+    private LinearLayout homePage, settingsPage, toolsPage, setupPage, navigation;
+    private TextView homeMode, setupProgress, setupTitle, setupDetail;
+    private LinearLayout setupModes;
+    private Button setupAction, setupSkip, setupBack, setupMore;
+    private boolean setupVisible, reviewMode, screenBuilt;
+    private String currentPage = "home";
+    private SetupFlowPolicy.Step displayedStep;
+    private SetupFlowPolicy.Step backStep;
+    private boolean lastRequiredReady;
+    private android.window.OnBackInvokedCallback backCallback;
     private final Runnable ticker = new Runnable() {
         @Override public void run() {
             if (!resumed) return;
@@ -89,6 +97,12 @@ public class MainActivity extends Activity {
             foregroundStartupPending = state.getBoolean("foregroundStartupPending", false);
             foregroundStartupDeadline = state.getLong("foregroundStartupDeadline", 0);
             foregroundErrorBeforeStart = state.getString("foregroundErrorBeforeStart", "");
+            currentPage = state.getString("currentPage", "home");
+            setupVisible = state.getBoolean("setupVisible", false);
+            reviewMode = state.getBoolean("reviewMode", false);
+            String savedStep = state.getString("backStep", "");
+            try { if (!savedStep.isEmpty()) backStep = SetupFlowPolicy.Step.valueOf(savedStep); }
+            catch (IllegalArgumentException ignored) { backStep = null; }
         }
         leadSeconds = settings.getInt("leadSeconds", 60);
         if (leadSeconds != 0 && leadSeconds != 60 && leadSeconds != 300) leadSeconds = 60;
@@ -99,6 +113,13 @@ public class MainActivity extends Activity {
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
                 | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
         buildScreen();
+        if (state == null) {
+            setupVisible = setupStep() != SetupFlowPolicy.Step.READY;
+            reviewMode = setupStep() == SetupFlowPolicy.Step.MODE;
+        }
+        screenBuilt = true;
+        lastRequiredReady = SetupFlowPolicy.requiredReady(setupStep());
+        refresh();
         renderExportState();
         FarmAccessibilityService.refreshDiskProgress(this);
     }
@@ -122,109 +143,92 @@ public class MainActivity extends Activity {
         root.requestApplyInsets();
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
-        root.addView(scroll, new LinearLayout.LayoutParams(-1, -1));
+        root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
         LinearLayout page = column();
         page.setPadding(dp(20), dp(26), dp(20), dp(28));
         scroll.addView(page);
-        addText(page, "本机工具  /  FARM REMINDER", 11, GREEN, true, 0);
-        addText(page, "农场成熟提醒", 29, INK, true, 9);
-        addText(page, "看清成熟时间，再安心离开。", 15, MUTED, false, 7);
+        homePage = column(); settingsPage = column(); toolsPage = column(); setupPage = column();
+        page.addView(homePage); page.addView(settingsPage); page.addView(toolsPage); page.addView(setupPage);
+        addText(homePage, "农场提醒", 30, INK, true, 0);
+        homeMode = addText(homePage, "使用情况模式", 13, MUTED, false, 6);
 
-        LinearLayout capture = card(page, 24, 0xFFE9EFE5);
-        runningLabel = addText(capture, "○  监测未启动", 13, GREEN, true, 0);
-        addText(capture, "记录好友农场的成熟时间", 20, INK, true, 12);
-        addText(capture, "两种模式均需自行启用仅用于截图的无障碍服务，不读取节点树、窗口列表或监听界面事件。截图与识别结果保存在应用私有目录，不自动删除，仅手动导出，不自动上传。", 14, MUTED, false, 9);
-        addText(capture, "前台判断模式", 14, INK, true, 16);
-        modeChoices = new RadioGroup(this);
-        modeChoices.setOrientation(RadioGroup.VERTICAL);
-        // Preferences own this selection; restoring generated view IDs must not change the mode.
-        modeChoices.setSaveEnabled(false);
-        capture.addView(modeChoices, spaced(-1, -2, 5));
-        usageMode = modeChoice("使用情况模式（默认）");
-        shizukuMode = modeChoice("Shizuku 系统任务模式");
-        modeChoices.check(ShizukuTaskGate.isEnabled(this) ? shizukuMode.getId() : usageMode.getId());
-        modeChoices.setOnCheckedChangeListener((group, checkedId) -> {
-            if (updatingMode) return;
-            if (!canChangeMode()) {
-                showFeedback("请先停止监测，待前台服务停止后再切换模式。");
-                refresh();
-                return;
-            }
-            settings.edit().putBoolean("useShizuku", checkedId == shizukuMode.getId()).apply();
-            showFeedback("模式已保存；不会自动授权或启动监测，请检查权限后手动开始。");
+        LinearLayout capture = card(homePage, 24, 0xFFE4EEDD);
+        addText(capture, "监测", 12, GREEN, true, 0);
+        runningLabel = addText(capture, "准备就绪", 26, INK, true, 12);
+        captureStatus = addText(capture, "", 14, MUTED, false, 8);
+        startButton = button(capture, "开始监测", true, 22, this::requestMonitoring);
+        stopButton = button(capture, "停止监测", true, 22, () -> {
+            try {
+                MonitorForegroundService.requestStop(this); foregroundStartupPending = false;
+                showFeedback("已停止，截图与提醒保留");
+            } catch (RuntimeException e) { showFeedback("停止失败，请重试"); }
             refresh();
         });
-        modeHint = addText(capture, "仅停止监测后可切换模式。", 12, MUTED, false, 5);
-        modeDescription = addText(capture, "", 13, MUTED, false, 9);
-        shizukuStatus = addText(capture, "Shizuku · 待检查", 13, GREEN, true, 9);
-        shizukuPermissionButton = button(capture, "请求 Shizuku 授权 / 刷新状态", false, 8, () -> {
-            ShizukuTaskGate.get(this).requestPermission();
-            showFeedback("已请求检查 Shizuku 运行与授权状态，请查看上方状态更新；如弹出授权请求，请自行确认。支持已授权的 Root 或 ADB Shell 运行方式，无需切换方式。");
-            refresh();
-        });
-        addText(capture, "满足所选模式的截图条件后，以 500 毫秒为目标间隔截取整屏。每次进入只观察首20秒：期间识别到有效成熟倒计时（包括已有提醒）即可继续截图，不要求读到昵称；之后不会因暂时无结果而暂停。首20秒始终无结果则暂停本次停留的新增截图，已保存图片继续识别。离开后重新进入、上下文变化或手动停止再开始可重试；迟到识别不会自动恢复已超时的截图。缺权限、锁屏或状态未知时仍暂停，手动停止也暂停队列处理。\n成熟词不证明游戏身份。请先关闭敏感页面，再手动进入农场。系统快照、使用记录和识别可能延迟，前台判断与截图不是原子操作，切换或覆盖可能截到其他应用或系统内容，多窗口不可靠，不保证只截农场或消除风控。", 13, MUTED, false, 9);
-        usageAccessStatus = addText(capture, "使用情况访问 · 待检查", 13, GREEN, true, 9);
-        captureStatus = addText(capture, "未运行", 13, INK, false, 14);
-        foregroundStatus = addText(capture, "前台监测服务 · 未启动", 13, GREEN, true, 8);
-        addText(capture, "监测时显示静默常驻通知，可降低被系统回收的概率，仍受系统管理。点击监测通知可返回本应用。", 12, MUTED, false, 7);
-        monitorNotificationHint = addText(capture, "通知栏中的监测状态和停止按钮可能不可见，可返回应用停止。", 12, MUTED, false, 7);
-        monitorNotificationHint.setVisibility(View.GONE);
-        foregroundError = addText(capture, "", 13, INK, false, 7);
-        foregroundError.setVisibility(View.GONE);
-        LinearLayout progress = column();
-        progress.setPadding(dp(14), dp(14), dp(14), dp(14));
-        progress.setBackground(background(0xFFF7FAF3, 14, 0xFFD6E2D1));
-        capture.addView(progress, spaced(-1, -2, 14));
-        addText(progress, "OCR 处理进度", 12, GREEN, true, 0);
-        processedCount = addText(progress, "已识别 0 张", 21, INK, true, 8);
-        pendingCount = addText(progress, "待识别 0 张", 21, GREEN, true, 4);
-        ocrState = addText(progress, "暂无正在识别的画面", 13, GREEN, false, 9);
-        addText(progress, "已识别指完成 OCR 尝试，不代表已添加提醒。待识别仅计排队图片，不含正在识别的 1 张或失败保留图片。", 12, MUTED, false, 8);
-        queueDetails = addText(progress, "", 12, MUTED, false, 8);
-        addText(progress, "队列无固定张数限制；空间不足时暂停新增截图，不淘汰待处理图片。重新打开应用只恢复统计，需手动开始监测才会继续处理。", 12, MUTED, false, 8);
+        LinearLayout counts = new LinearLayout(this);
+        homePage.addView(counts, spaced(-1, -2, 20));
+        LinearLayout completed = column(), pending = column();
+        counts.addView(completed, new LinearLayout.LayoutParams(0, -2, 1));
+        counts.addView(pending, new LinearLayout.LayoutParams(0, -2, 1));
+        processedCount = addText(completed, "已识别 0 张", 17, INK, true, 0);
+        pendingCount = addText(pending, "待处理 0 张", 17, INK, true, 0);
+        listTitle = addText(homePage, "已记录提醒 · 0", 21, INK, true, 30);
+        reminders = column(); homePage.addView(reminders, spaced(-1, -2, 8));
+
+        addText(toolsPage, "工具", 28, INK, true, 0);
+        LinearLayout progress = card(toolsPage, 22, Color.WHITE);
+        addText(progress, "处理与存储", 19, INK, true, 0);
+        ocrState = addText(progress, "", 13, INK, false, 12);
+        queueDetails = addText(progress, "", 13, MUTED, false, 10);
+        addText(progress, "已识别指完成识别尝试，不是新增提醒数。待处理不含正在识别及失败图片。", 12, MUTED, false, 10);
         retryButton = button(progress, "重试保存/失败图片", false, 10, () -> {
             try {
                 FarmAccessibilityService.retryFailedFrames(this);
                 showFeedback(FarmAccessibilityService.isRunning
-                        ? "已请求重试失败图片，请等待统计更新。"
-                        : "已请求重试失败图片；尚未开始监测，需手动开始才会继续识别。");
-            } catch (RuntimeException e) { showFeedback("未能请求重试，请稍后再试。失败图片仍保留。"); }
+                        ? "已请求重试" : "已请求重试，手动开始监测后继续识别");
+            } catch (RuntimeException e) { showFeedback("未能重试，失败图片仍保留"); }
         });
         retryButton.setVisibility(View.GONE);
-        addText(progress, "所有已保存截图在识别后仍会保留，用于核对；不会自动上传。请复现后停止监测并导出，避免持续占用空间。", 12, MUTED, false, 10);
-        addText(progress, "可先手动离开微信，确认已停止新增截图并等待队列处理完成，再停止监测并导出。诊断包包含截图、识别文字及好友昵称等敏感信息，仅交给可信人员；请选择可信的保存位置。", 12, MUTED, false, 8);
-        exportButton = button(progress, "导出诊断包", false, 10, this::requestDiagnosticsExport);
-        exportStatus = addText(progress, "无需启动监测或启用无障碍服务即可导出已有记录。", 12, MUTED, false, 7);
-        startButton = button(capture, "检查无障碍设置", true, 16, this::requestMonitoring);
-        stopButton = button(capture, "停止监测", false, 8, () -> {
-            try {
-                MonitorForegroundService.requestStop(this);
-                foregroundStartupPending = false;
-                showFeedback("已请求停止监测：停止截图和队列处理，已保存图片与提醒均保留。");
-            } catch (RuntimeException e) { showFeedback("停止失败，请稍后重试。"); }
-            refresh();
-        });
-        feedback = addText(capture, "", 13, GREEN, false, 10);
-        feedback.setVisibility(View.GONE);
-        Button diagnosticsToggle = button(capture, "查看监测诊断 ▾", false, 12, () -> {});
-        diagnosticsText = addText(capture, "暂无诊断数据", 12, MUTED, false, 9);
-        diagnosticsText.setVisibility(View.GONE);
+        LinearLayout export = card(toolsPage, 16, Color.WHITE);
+        addText(export, "诊断包", 19, INK, true, 0);
+        addText(export, "含截图、识别文字及昵称，仅交给可信人员。", 13, MUTED, false, 8);
+        exportButton = button(export, "导出 ZIP", false, 12, () ->
+                new AlertDialog.Builder(this).setTitle("导出诊断包？")
+                        .setMessage("包含保留的整屏截图与识别记录，可能含其他页面或敏感内容。请选择可信的保存位置。")
+                        .setNegativeButton("取消", null).setPositiveButton("选择位置", (d, w) -> requestDiagnosticsExport()).show());
+        exportStatus = addText(export, "", 12, MUTED, false, 8);
+        Button diagnosticsToggle = button(toolsPage, "展开诊断", false, 16, () -> {});
+        LinearLayout technical = card(toolsPage, 8, Color.WHITE);
+        technical.setVisibility(View.GONE);
+        foregroundStatus = addText(technical, "", 13, INK, false, 0);
+        foregroundError = addText(technical, "", 13, INK, false, 8);
+        diagnosticsText = addText(technical, "", 12, MUTED, false, 10);
+        diagnosticsText.setTextIsSelectable(true);
         diagnosticsToggle.setOnClickListener(v -> {
-            boolean expanded = diagnosticsText.getVisibility() != View.VISIBLE;
-            diagnosticsText.setVisibility(expanded ? View.VISIBLE : View.GONE);
-            diagnosticsToggle.setText(expanded ? "收起监测诊断 ▴" : "查看监测诊断 ▾");
+            boolean expanded = technical.getVisibility() != View.VISIBLE;
+            technical.setVisibility(expanded ? View.VISIBLE : View.GONE);
+            diagnosticsToggle.setText(expanded ? "收起诊断" : "展开诊断");
         });
-        button(capture, "查看无障碍设置", false, 8,
-                () -> openSettings(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
-        usageSettingsButton = button(capture, "设置使用情况访问权限", false, 8, this::openUsageAccessSettings);
+        button(technical, "刷新诊断", false, 10, () -> {
+            FarmAccessibilityService.refreshDiskProgress(this); refresh();
+        });
 
-        LinearLayout timing = card(page, 16, Color.WHITE);
+        addText(settingsPage, "设置", 28, INK, true, 0);
+        LinearLayout permissions = card(settingsPage, 22, Color.WHITE);
+        addText(permissions, "模式与权限", 19, INK, true, 0);
+        button(permissions, "权限中心", false, 12, () -> {
+            reviewMode = true; backStep = null; setupVisible = true; refresh();
+        });
+        notificationStatus = addText(permissions, "", 14, INK, false, 16);
+        notificationButton = button(permissions, "管理通知", false, 7, this::requestNotifications);
+        exactStatus = addText(permissions, "", 14, INK, false, 16);
+        exactButton = button(permissions, "管理精确闹钟（可选）", false, 7, this::requestExactAlarm);
+        LinearLayout timing = card(settingsPage, 16, Color.WHITE);
         addText(timing, "提前多久提醒", 18, INK, true, 0);
-        addText(timing, "只用于之后新记录的提醒，不会改变已记录的提醒时间。", 13, MUTED, false, 7);
+        addText(timing, "仅用于新记录的提醒", 12, MUTED, false, 7);
         LinearLayout choices = new LinearLayout(this);
         timing.addView(choices, spaced(-1, -2, 13));
         int[] values = {0, 60, 300};
-        String[] labels = {"成熟时", "提前 1 分钟", "提前 5 分钟"};
+        String[] labels = {"成熟时", "1 分钟", "5 分钟"};
         for (int i = 0; i < values.length; i++) {
             final int value = values[i];
             Button choice = makeButton(labels[i], false);
@@ -237,72 +241,253 @@ public class MainActivity extends Activity {
                 leadSeconds = value;
                 settings.edit().putInt("leadSeconds", value).apply();
                 updateLeadButtons();
-                if (FarmAccessibilityService.isRunning) showFeedback("已保存，将用于之后新记录的提醒。");
             });
         }
         updateLeadButtons();
 
-        LinearLayout permissions = card(page, 16, Color.WHITE);
-        addText(permissions, "提醒是否准备好", 18, INK, true, 0);
-        notificationStatus = addText(permissions, "", 14, INK, false, 13);
-        notificationButton = button(permissions, "允许通知", false, 8, this::requestNotifications);
-        exactStatus = addText(permissions, "", 14, INK, false, 17);
-        exactButton = button(permissions, "设置精确提醒权限", false, 8, this::requestExactAlarm);
-        addText(permissions, "到点仅短振动一次，无铃声、不弹窗。通知权限、勿扰及系统设置可能影响通知和振动；未允许精确闹钟或系统省电可能导致延迟。", 12, MUTED, false, 12);
-        button(permissions, "测试振动 · 10 秒后", false, 13, () -> {
+        button(timing, "测试提醒 · 10 秒后", false, 13, () -> {
             try {
                 scheduler.scheduleTest(10);
-                showMessage("已安排 10 秒后测试短振动一次，无铃声；通知和振动受权限、勿扰及系统设置影响。");
-            } catch (RuntimeException e) { showMessage("测试振动未能安排，请检查系统设置后重试。"); }
+                showMessage("已安排，10 秒后短振动一次；可能受系统设置影响");
+            } catch (RuntimeException e) { showMessage("测试未能安排，请检查设置"); }
         });
 
-        LinearLayout heading = column();
-        page.addView(heading, spaced(-1, -2, 27));
-        listTitle = addText(heading, "已记录提醒 · 0", 21, INK, true, 0);
-        clearButton = button(heading, "清除已提交记录", false, 10, () ->
+        clearButton = button(settingsPage, "清理已提交提醒", false, 16, () ->
                 new AlertDialog.Builder(this).setTitle("清除已提交记录？")
                         .setMessage("只移除已提交提醒的记录，不影响待提醒项目。提交不代表实际送达。")
                         .setNegativeButton("取消", null).setPositiveButton("清除", (d, w) -> {
                             store.clearFired(); refresh();
                         }).show());
-        reminders = column();
-        page.addView(reminders, spaced(-1, -2, 4));
-        addText(page, "识别规则", 14, INK, true, 25);
-        addText(page, "单张截图识别到成熟倒计时即添加提醒；名称读不到时标为“昵称未识别”；已有提醒不重复添加，也算本次首20秒内的有效结果。生长阶段倒计时不作为成熟时间。仅在 OCR 解析中将“后戌熟”定向纠正为“后成熟”，原始截图与 OCR 文件保持原样。请核对记录。", 13, MUTED, false, 7);
-        addText(page, "仅在本机处理画面，不上传数据。不会自动点击微信或操作游戏，不需要悬浮窗权限。", 12, MUTED, false, 12);
+        button(settingsPage, "截图与隐私", false, 8, this::showPrivacy);
+        buildSetupPanel();
+        feedback = addText(page, "", 13, GREEN, false, 12);
+        feedback.setVisibility(View.GONE);
+        navigation = new LinearLayout(this);
+        navigation.setPadding(dp(14), dp(6), dp(14), dp(10));
+        root.addView(navigation, new LinearLayout.LayoutParams(-1, -2));
+        for (String name : new String[]{"监测", "设置", "工具"}) {
+            Button tab = makeButton(name, false);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1);
+            lp.setMargins(dp(3), 0, dp(3), 0); navigation.addView(tab, lp);
+            tab.setOnClickListener(v -> {
+                currentPage = "设置".equals(name) ? "settings" : "工具".equals(name) ? "tools" : "home";
+                setupVisible = false; reviewMode = false; backStep = null; refresh(); scroll.smoothScrollTo(0, 0);
+            });
+        }
+    }
+
+    private void buildSetupPanel() {
+        setupProgress = addText(setupPage, "准备", 13, GREEN, true, 6);
+        setupTitle = addText(setupPage, "选择监测方式", 28, INK, true, 24);
+        setupDetail = addText(setupPage, "", 15, MUTED, false, 12);
+        setupModes = card(setupPage, 24, Color.WHITE);
+        modeChoices = new RadioGroup(this);
+        modeChoices.setOrientation(RadioGroup.VERTICAL); modeChoices.setSaveEnabled(false);
+        setupModes.addView(modeChoices);
+        usageMode = modeChoice("使用情况 · 默认"); shizukuMode = modeChoice("Shizuku · Root / Shell");
+        modeChoices.check(ShizukuTaskGate.isEnabled(this) ? shizukuMode.getId() : usageMode.getId());
+        modeChoices.setOnCheckedChangeListener((group, id) -> {
+            if (updatingMode) return;
+            if (!canChangeMode()) { showFeedback("请先停止监测"); refresh(); return; }
+            settings.edit().putBoolean("useShizuku", id == shizukuMode.getId()).apply(); refresh();
+        });
+        modeHint = addText(setupModes, "", 12, MUTED, false, 8);
+        modeDescription = addText(setupModes, "", 13, MUTED, false, 8);
+        shizukuStatus = addText(setupPage, "", 14, GREEN, true, 20);
+        setupAction = button(setupPage, "继续", true, 24, this::performSetupAction);
+        setupMore = button(setupPage, "了解更多", false, 8, this::showPrivacy);
+        setupSkip = button(setupPage, "稍后", false, 8, () -> {
+            if (displayedStep == SetupFlowPolicy.Step.NOTIFICATIONS)
+                settings.edit().putBoolean("notificationDeferred", true).apply();
+            reviewMode = false; backStep = null; setupVisible = false; currentPage = "home"; refresh();
+        });
+        setupBack = button(setupPage, "返回", false, 8, this::navigateBack);
     }
 
     private void requestMonitoring() {
-        if (foregroundStartupPending || MonitorForegroundService.isActive) return;
-        if (Build.VERSION.SDK_INT < 30) {
-            showFeedback("此设备低于 Android 11，不支持所需的无障碍截图，无法开始监测。已有提醒仍可使用。");
-        } else if (ShizukuTaskGate.isEnabled(this) && !ShizukuTaskGate.get(this).hasPermission()) {
-            showFeedback("Shizuku 尚未就绪，请查看运行与授权状态。当前状态："
-                    + ShizukuTaskGate.get(this).status()
-                    + "。请确认 Shizuku 服务已运行，并通过本页按钮检查或请求授权；支持已授权的 Root 或 ADB Shell 运行方式，无需切换方式。尚未开始监测，不会自动回退使用情况模式。");
-        } else if (!ShizukuTaskGate.isEnabled(this) && !UsageAccessGate.hasPermission(this)) {
-            showFeedback("尚未允许使用情况访问，不能开始监测。请在系统设置中允许，返回后手动开始。");
-            openUsageAccessSettings();
-        } else if (!FarmAccessibilityService.isEnabled(this)) {
-            showFeedback("服务当前不可用，等待系统连接或恢复；请检查系统无障碍设置。尚未开始监测，当前状态不代表你已关闭授权。");
-            openSettings(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
-        } else if (!FarmAccessibilityService.isConnected) {
-            showFeedback("等待系统连接无障碍服务；尚未开始监测。需服务已连接才能启动，可稍后返回检查，或查看系统无障碍设置。");
-        } else if (!FarmAccessibilityService.isRunning) {
-            try {
-                foregroundErrorBeforeStart = MonitorForegroundService.lastError;
-                MonitorForegroundService.requestStart(this);
-                foregroundStartupPending = true;
-                foregroundRequestFailed = false;
-                foregroundStartupDeadline = SystemClock.uptimeMillis() + 5000;
-                showFeedback("已请求启动，等待监测状态更新。");
-            } catch (RuntimeException e) {
-                foregroundStartupPending = false;
-                foregroundRequestFailed = true;
-                showFeedback("无法请求启动前台监测服务，请检查系统设置后重试。");
-            }
+        if (foregroundStartupPending || MonitorForegroundService.isActive || FarmAccessibilityService.isRunning) return;
+        if (setupStep() != SetupFlowPolicy.Step.READY) {
+            setupVisible = true; reviewMode = false; backStep = null; refresh(); return;
+        }
+        try {
+            foregroundErrorBeforeStart = MonitorForegroundService.lastError;
+            MonitorForegroundService.requestStart(this);
+            foregroundStartupPending = true;
+            foregroundRequestFailed = false;
+            foregroundStartupDeadline = SystemClock.uptimeMillis() + 5000;
+            feedback.setVisibility(View.GONE);
+        } catch (RuntimeException e) {
+            foregroundStartupPending = false;
+            foregroundRequestFailed = true;
+            showFeedback("无法启动，请检查截图服务后重试");
         }
         refresh();
+    }
+
+    private SetupFlowPolicy.Step setupStep() {
+        boolean shizuku = ShizukuTaskGate.isEnabled(this);
+        return SetupFlowPolicy.next(Build.VERSION.SDK_INT >= 30,
+                settings.getBoolean("modeChosen", false), shizuku,
+                !shizuku && UsageAccessGate.hasPermission(this),
+                shizuku && ShizukuTaskGate.get(this).hasPermission(),
+                FarmAccessibilityService.isEnabled(this), FarmAccessibilityService.isConnected,
+                notificationsAllowed(), settings.getBoolean("notificationDeferred", false));
+    }
+
+    private void renderNavigation() {
+        SetupFlowPolicy.Step actual = setupStep();
+        boolean ready = SetupFlowPolicy.requiredReady(actual);
+        if (screenBuilt && lastRequiredReady && !ready && !reviewMode) {
+            setupVisible = true; reviewMode = false; backStep = null;
+        }
+        lastRequiredReady = ready;
+        if (setupVisible && actual == SetupFlowPolicy.Step.MODE && backStep == null) reviewMode = true;
+        if (setupVisible && actual == SetupFlowPolicy.Step.READY && !reviewMode && backStep == null) {
+            setupVisible = false; currentPage = "home";
+        }
+        homePage.setVisibility(!setupVisible && "home".equals(currentPage) ? View.VISIBLE : View.GONE);
+        settingsPage.setVisibility(!setupVisible && "settings".equals(currentPage) ? View.VISIBLE : View.GONE);
+        toolsPage.setVisibility(!setupVisible && "tools".equals(currentPage) ? View.VISIBLE : View.GONE);
+        setupPage.setVisibility(setupVisible ? View.VISIBLE : View.GONE);
+        navigation.setVisibility(setupVisible ? View.GONE : View.VISIBLE);
+        if (Build.VERSION.SDK_INT >= 33) updateBackCallback();
+        for (int i = 0; i < navigation.getChildCount(); i++) {
+            Button tab = (Button) navigation.getChildAt(i);
+            boolean selected = i == ("settings".equals(currentPage) ? 1 : "tools".equals(currentPage) ? 2 : 0);
+            tab.setSelected(selected);
+            tab.setTextColor(selected ? Color.WHITE : GREEN);
+            tab.setBackground(background(selected ? GREEN : 0xFFF0F3EB, 13, 0));
+            tab.setContentDescription(tab.getText() + (selected ? "，当前页面" : ""));
+        }
+        if (!setupVisible) return;
+        displayedStep = reviewMode ? SetupFlowPolicy.Step.MODE : backStep != null ? backStep : actual;
+        boolean mode = displayedStep == SetupFlowPolicy.Step.MODE;
+        boolean screenshot = displayedStep == SetupFlowPolicy.Step.SCREENSHOT || displayedStep == SetupFlowPolicy.Step.WAITING;
+        setupModes.setVisibility(mode ? View.VISIBLE : View.GONE);
+        setupMore.setVisibility(mode || screenshot ? View.VISIBLE : View.GONE);
+        shizukuStatus.setVisibility(displayedStep == SetupFlowPolicy.Step.SOURCE && ShizukuTaskGate.isEnabled(this)
+                ? View.VISIBLE : View.GONE);
+        setupAction.setEnabled(true);
+        setupSkip.setText(displayedStep == SetupFlowPolicy.Step.NOTIFICATIONS ? "暂不开启，继续" : "稍后设置");
+        switch (displayedStep) {
+            case MODE:
+                setupProgress.setText("准备"); setupTitle.setText("选择监测方式");
+                setupDetail.setText("只设置所选方式需要的权限"); setupAction.setText("继续"); break;
+            case SOURCE:
+                setupProgress.setText("1 / 3");
+                if (ShizukuTaskGate.isEnabled(this)) {
+                    setupTitle.setText("连接 Shizuku");
+                    setupDetail.setText("先启动 Shizuku，再点击授权；支持 Root / Shell");
+                    shizukuStatus.setText(shortShizukuStatus());
+                    setupAction.setText(ShizukuTaskGate.get(this).hasPermission() ? "继续" : "授权 / 刷新");
+                } else {
+                    setupTitle.setText("允许使用情况访问");
+                    setupDetail.setText("用于判断微信小程序是否在前台");
+                    setupAction.setText(UsageAccessGate.hasPermission(this) ? "继续" : "前往允许");
+                }
+                break;
+            case SCREENSHOT:
+                setupProgress.setText("2 / 3"); setupTitle.setText("启用截图服务");
+                setupDetail.setText("截图仅用于识别，可能包含其他内容；截图和识别文字会在本机保留，可导出。");
+                setupAction.setText(FarmAccessibilityService.isEnabled(this) ? "继续" : "前往启用"); break;
+            case WAITING:
+                setupProgress.setText("2 / 3"); setupTitle.setText("等待截图服务连接");
+                setupDetail.setText("服务已启用，正在等待系统连接");
+                setupAction.setText("刷新连接状态");
+                setupMore.setText("查看系统设置"); break;
+            case NOTIFICATIONS:
+                setupProgress.setText("3 / 3 · 可选"); setupTitle.setText("开启通知");
+                setupDetail.setText("用于成熟提醒和监测状态；不开启仍可监测，但提醒可能不可见。");
+                setupAction.setText("允许通知"); break;
+            case UNSUPPORTED:
+                setupProgress.setText("设备限制"); setupTitle.setText("需要 Android 11 及以上");
+                setupDetail.setText("此设备不能截图，已有提醒与导出仍可使用");
+                setupAction.setText("返回首页"); break;
+            default:
+                setupProgress.setText("已完成"); setupTitle.setText("准备就绪");
+                setupDetail.setText("返回首页后，手动开始监测"); setupAction.setText("返回首页");
+        }
+        if (displayedStep != SetupFlowPolicy.Step.WAITING) setupMore.setText("了解更多");
+        setupMore.setOnClickListener(v -> {
+            if (displayedStep == SetupFlowPolicy.Step.WAITING)
+                openSettings(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+            else showPrivacy();
+        });
+    }
+
+    private String shortShizukuStatus() {
+        String status = ShizukuTaskGate.get(this).status();
+        if (ShizukuTaskGate.get(this).hasPermission()) return "已连接";
+        // Full backend status stays in the diagnostics panel, not in the permission prompt.
+        if (status != null && (status.contains("未运行") || status.contains("未安装") || status.contains("不可用")))
+            return "尚未连接，请先启动 Shizuku";
+        return "等待连接或授权";
+    }
+
+    private void performSetupAction() {
+        SetupFlowPolicy.Step step = displayedStep;
+        backStep = null;
+        switch (step) {
+            case MODE:
+                settings.edit().putBoolean("modeChosen", true).apply(); reviewMode = false; break;
+            case SOURCE:
+                if (ShizukuTaskGate.isEnabled(this)) {
+                    if (!ShizukuTaskGate.get(this).hasPermission()) ShizukuTaskGate.get(this).requestPermission();
+                } else if (!UsageAccessGate.hasPermission(this)) openUsageAccessSettings();
+                break;
+            case SCREENSHOT:
+                if (!FarmAccessibilityService.isEnabled(this))
+                    openSettings(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+                break;
+            case WAITING: break; // A refresh is never an automatic trip back into settings.
+            case NOTIFICATIONS: requestNotificationPermission(); break;
+            default: setupVisible = false; currentPage = "home"; reviewMode = false;
+        }
+        feedback.setVisibility(View.GONE);
+        refresh();
+    }
+
+    private void navigateBack() {
+        if (setupVisible) {
+            if (displayedStep == SetupFlowPolicy.Step.MODE || displayedStep == SetupFlowPolicy.Step.UNSUPPORTED) {
+                setupVisible = false; reviewMode = false; backStep = null; currentPage = "home";
+            } else if (displayedStep == SetupFlowPolicy.Step.SOURCE) {
+                reviewMode = true; backStep = null;
+            } else if (displayedStep == SetupFlowPolicy.Step.NOTIFICATIONS) {
+                backStep = SetupFlowPolicy.Step.SCREENSHOT;
+            } else {
+                backStep = SetupFlowPolicy.Step.SOURCE;
+            }
+        } else { currentPage = "home"; }
+        feedback.setVisibility(View.GONE);
+        refresh();
+    }
+
+    @Override public void onBackPressed() {
+        if (setupVisible || !"home".equals(currentPage)) navigateBack();
+        else super.onBackPressed();
+    }
+
+    @android.annotation.TargetApi(33)
+    private void updateBackCallback() {
+        boolean intercept = setupVisible || !"home".equals(currentPage);
+        if (intercept && backCallback == null) {
+            backCallback = this::navigateBack;
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                    android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, backCallback);
+        } else if (!intercept && backCallback != null) {
+            getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(backCallback);
+            backCallback = null;
+        }
+    }
+
+    private void showPrivacy() {
+        new AlertDialog.Builder(this).setTitle("截图与隐私")
+                .setMessage("截图是整屏画面，切换页面、通知或覆盖层可能使截图包含其他应用或系统内容。请先关闭敏感页面。\n\n"
+                        + "截图与 OCR 文字在本机保存，识别后仍保留，不自动删除或上传，可手动导出；诊断包可能含昵称等敏感信息，仅交给可信人员。停止监测会暂停截图和队列处理，保留图片与提醒。\n\n"
+                        + "使用情况模式不能区分具体小游戏；Shizuku 模式按系统任务判断，支持已授权的 Root / Shell，权限范围更大，Root 风险更高。不读取无障碍节点或窗口列表，不监听界面事件。前台判断和截图并非同时完成，多窗口不可靠，不能保证只截农场或避免微信风控。\n\n"
+                        + "不会自动点击微信或操作游戏。每次进入前 20 秒未识别到成熟倒计时会暂停新增截图，可离开重进或手动重启监测。昵称未识别仍可记录。通知、振动和提醒时间受权限与系统设置影响。")
+                .setPositiveButton("知道了", null).show();
     }
 
     private void requestDiagnosticsExport() {
@@ -349,7 +534,7 @@ public class MainActivity extends Activity {
     private void renderExportState() {
         if (isFinishing() || isDestroyed()) return;
         exportButton.setEnabled(!exportState.busy && !exportState.picking);
-        exportButton.setText(exportState.busy ? "正在导出…" : "导出诊断包");
+        exportButton.setText(exportState.busy ? "正在导出…" : "导出 ZIP");
         String message = exportState.busy ? "正在导出，请稍候；不会改变监测状态。"
                 : exportState.picking ? "请选择诊断包的保存位置。"
                 : exportState.message.isEmpty() ? "无需启动监测或启用无障碍服务即可导出已有记录。"
@@ -390,6 +575,10 @@ public class MainActivity extends Activity {
         state.putBoolean("foregroundStartupPending", foregroundStartupPending);
         state.putLong("foregroundStartupDeadline", foregroundStartupDeadline);
         state.putString("foregroundErrorBeforeStart", foregroundErrorBeforeStart);
+        state.putString("currentPage", currentPage);
+        state.putBoolean("setupVisible", setupVisible);
+        state.putBoolean("reviewMode", reviewMode);
+        state.putString("backStep", backStep == null ? "" : backStep.name());
         super.onSaveInstanceState(state);
     }
 
@@ -400,6 +589,20 @@ public class MainActivity extends Activity {
     }
 
     private void requestNotifications() {
+        if (notificationsAllowed()) {
+            openSettings(new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName()));
+            return;
+        }
+        new AlertDialog.Builder(this).setTitle("开启通知")
+                .setMessage("用于成熟提醒和监测状态；不开启仍可监测，但提醒可能不可见。")
+                .setNegativeButton("稍后", null)
+                .setPositiveButton("继续", (d, w) -> requestNotificationPermission()).show();
+    }
+
+    private void requestNotificationPermission() {
+        // This is a skipped optional offer, never an assertion that permission was granted.
+        settings.edit().putBoolean("notificationDeferred", true).apply();
         if (Build.VERSION.SDK_INT >= 33
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
                 && (!settings.getBoolean("notificationAsked", false)
@@ -421,12 +624,10 @@ public class MainActivity extends Activity {
     }
 
     private void requestExactAlarm() {
-        if (scheduler.canScheduleExact()) {
-            showMessage("当前已支持精确提醒，仍可能受系统设置影响。");
-        } else if (Build.VERSION.SDK_INT >= 31) {
+        if (Build.VERSION.SDK_INT >= 31) {
             openSettings(new Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
                     Uri.parse("package:" + getPackageName())));
-        }
+        } else showMessage("此设备已支持精确提醒，仍可能受系统设置影响");
     }
 
     private void openSettings(Intent intent) {
@@ -469,6 +670,8 @@ public class MainActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        if (Build.VERSION.SDK_INT >= 33 && backCallback != null)
+            getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(backCallback);
         if (exportState.activity.get() == this) exportState.activity.clear();
         handler.removeCallbacksAndMessages(null);
         super.onDestroy();
@@ -482,15 +685,9 @@ public class MainActivity extends Activity {
         boolean useShizuku = ShizukuTaskGate.isEnabled(this);
         boolean usageAllowed = !useShizuku && UsageAccessGate.hasPermission(this);
         boolean sourceReady = useShizuku ? ShizukuTaskGate.get(this).hasPermission() : usageAllowed;
-        usageAccessStatus.setText(useShizuku ? "使用情况访问 · 此模式不需要"
-                : usageAllowed ? "使用情况访问 · 已允许" : "使用情况访问 · 未允许，不能新增截图");
-        usageSettingsButton.setVisibility(useShizuku ? View.GONE : View.VISIBLE);
-        shizukuStatus.setVisibility(useShizuku ? View.VISIBLE : View.GONE);
-        shizukuPermissionButton.setVisibility(useShizuku ? View.VISIBLE : View.GONE);
-        if (useShizuku) shizukuStatus.setText("Shizuku · " + ShizukuTaskGate.get(this).status());
         modeDescription.setText(useShizuku
-                ? "当前：Shizuku 系统任务模式。支持用户已授权的 Shizuku Root 或 ADB Shell 运行方式；本工具不主动提权或启动 Shizuku，授权须自行点击确认。无需使用情况访问。只读固定系统任务命令，需前台任务、焦点、可见／RESUMED 状态与精确“QQ经典农场”任务描述标题匹配才截图；不是无障碍窗口标题。断连、撤权、快照过期或格式未知会暂停新增，不自动回退。权限范围实际比使用情况访问更大，Root 运行的授权风险更高；标题兼容性待真机验收，不保证实时或无风险。"
-                : "当前：使用情况模式。需使用情况访问权限，以历史记录中的微信 AppBrand 小程序容器线索开始截图；不限固定容器编号，不能区分具体小程序，可能截图其他小游戏。不是农场身份核验。");
+                ? "识别农场系统任务；需自行启动并授权 Shizuku。权限范围更大，Root 风险更高。"
+                : "通过使用记录判断小程序，无法区分具体小游戏。");
         boolean foregroundActive = MonitorForegroundService.isActive;
         String serviceError = MonitorForegroundService.lastError;
         boolean newServiceError = !blank(serviceError)
@@ -498,16 +695,13 @@ public class MainActivity extends Activity {
         if (foregroundStartupPending) {
             if (foregroundActive) {
                 foregroundStartupPending = false;
-                showFeedback(running ? (useShizuku
-                        ? "监测已开启；等待系统任务绑定与前台快照，符合农场任务条件后开始截图。请手动进入农场，避免展示敏感页面。"
-                        : "监测已开启；检测到小程序容器后开始截图。请手动进入农场，避免展示敏感页面。")
-                        : "前台监测服务已启动，等待监测状态更新。");
+                feedback.setVisibility(View.GONE);
             } else if (newServiceError) {
                 foregroundStartupPending = false;
-                showFeedback("前台监测未能启动，请检查无障碍服务连接及系统设置后重试。");
+                showFeedback("启动失败，请检查截图服务后重试");
             } else if (SystemClock.uptimeMillis() >= foregroundStartupDeadline) {
                 foregroundStartupPending = false;
-                showFeedback("启动状态尚未确认，请查看监测状态后重试。");
+                showFeedback("启动尚未确认，请检查后重试");
             }
         }
         foregroundStatus.setText("前台监测服务 · " + (foregroundActive ? "运行中" : "未启动")
@@ -518,28 +712,25 @@ public class MainActivity extends Activity {
         boolean modeEditable = canChangeMode();
         usageMode.setEnabled(modeEditable);
         shizukuMode.setEnabled(modeEditable);
-        modeHint.setText(modeEditable ? "仅停止监测后可切换模式；切换不会自动开始。"
-                : "监测运行或启动中，模式已锁定；请先停止监测，待前台服务停止后再切换。");
+        modeHint.setText(modeEditable ? "选择后不会自动开始监测" : "请先停止监测，再切换模式");
         boolean hasForegroundError = !foregroundActive && !foregroundStartupPending
                 && (foregroundRequestFailed || !blank(serviceError));
         foregroundError.setVisibility(hasForegroundError ? View.VISIBLE : View.GONE);
         foregroundError.setText("前台监测启动或运行遇到问题，请检查无障碍服务连接及系统设置后重试。");
-        String readiness = !supported ? "需要 Android 11 及以上；此设备不支持无障碍截图，无法开始监测。"
-                : !enabled ? (connected
-                        ? "服务当前不可用，等待系统恢复；请检查系统无障碍设置。连接标记仍在，但当前查询无法确认服务可用，不代表已关闭授权。"
-                        : "服务当前不可用／等待系统连接；请检查系统无障碍设置。当前查询无法确认服务可用，不代表已关闭授权。")
-                : !connected ? "等待系统连接无障碍服务；当前无法开始监测，请检查系统无障碍设置。"
-                : "无障碍服务已连接";
-        runningLabel.setText(!supported ? "○  此设备不支持监测"
-                : !sourceReady ? (useShizuku ? "○  Shizuku 未就绪 · 不新增截图" : "○  使用情况访问未允许 · 不新增截图")
-                : !enabled || !connected ? "○  服务尚未就绪"
-                : running ? "●  监测已开启 · 截图状态见下方" : "○  监测未启动 · 队列保留");
-        String status = FarmAccessibilityService.lastStatus;
-        captureStatus.setText(readiness + "\n监测状态：" + monitorStatusText(status));
+        homeMode.setText(useShizuku ? "Shizuku · Root / Shell" : "使用情况模式");
+        boolean requiredReady = supported && sourceReady && enabled && connected;
+        runningLabel.setText(!supported ? "设备暂不支持" : foregroundStartupPending ? "正在启动"
+                : !requiredReady ? "需要完成设置" : running ? "监测中" : foregroundActive ? "正在停止" : "准备就绪");
+        captureStatus.setText(!supported ? "截图需要 Android 11 及以上"
+                : !requiredReady ? "完成权限设置后，手动开始监测"
+                : running ? monitorStatusText(FarmAccessibilityService.lastStatus)
+                        + (notificationsAllowed() ? "" : "；通知未开启，提醒可能不可见")
+                : !notificationsAllowed() ? "通知未开启，提醒可能不可见；可返回此处停止"
+                : "手动开始后，进入好友农场查看成熟时间");
         OcrProgress progress = FarmAccessibilityService.getOcrProgress();
         renderExportState();
         processedCount.setText("已识别 " + progress.processed + " 张");
-        pendingCount.setText("待识别 " + progress.queued + " 张");
+        pendingCount.setText("待处理 " + progress.queued + " 张");
         ocrState.setText((progress.recognizing ? "正在识别 1 张 · 不计入待识别"
                 : !running ? "监测未启动 · 已保存队列保留，需手动开始"
                 : "暂无正在识别的图片") + "\n" + capturePauseText(progress, running, connected));
@@ -556,24 +747,21 @@ public class MainActivity extends Activity {
         retryButton.setVisibility(progress.retryAvailable ? View.VISIBLE : View.GONE);
         retryButton.setEnabled(progress.retryAvailable);
         String diagnostics = FarmAccessibilityService.diagnostics;
-        diagnosticsText.setText(blank(diagnostics) ? "暂无诊断数据。开始后可查看截图计数、OCR 处理与拒绝原因；不展示原图或完整识别文本。" : diagnostics);
-        startButton.setEnabled(supported && !running && !foregroundActive
-                && !foregroundStartupPending && (!sourceReady || !enabled || connected));
+        diagnosticsText.setText("监测状态：" + FarmAccessibilityService.lastStatus
+                + (useShizuku ? "\nShizuku：" + ShizukuTaskGate.get(this).status() : "")
+                + "\n" + (blank(diagnostics) ? "暂无诊断数据" : diagnostics));
+        boolean active = running || foregroundActive || foregroundStartupPending;
+        startButton.setVisibility(active ? View.GONE : View.VISIBLE);
+        startButton.setEnabled(supported && !active);
         startButton.setAlpha(startButton.isEnabled() ? 1f : 0.55f);
-        startButton.setText(!supported ? "此设备不支持监测"
-                : foregroundStartupPending ? "等待启动…" : !sourceReady
-                ? (useShizuku ? "检查 Shizuku 运行与授权状态" : "设置使用情况访问权限")
-                : !enabled ? "检查无障碍设置"
-                : !connected ? "等待服务连接…" : running ? "监测已开启"
-                : foregroundActive ? "前台监测服务运行中" : "开始监测");
-        stopButton.setVisibility(running || foregroundActive || foregroundStartupPending ? View.VISIBLE : View.GONE);
+        startButton.setText(!supported ? "设备不支持" : !requiredReady ? "完成设置" : "开始监测");
+        stopButton.setVisibility(active ? View.VISIBLE : View.GONE);
         boolean notified = notificationsAllowed();
-        monitorNotificationHint.setVisibility(notified ? View.GONE : View.VISIBLE);
         notificationStatus.setText(notified ? "通知 · 已开启" : "通知 · 未开启");
-        notificationButton.setText(notified ? "查看通知设置" : "开启通知 / 前往设置");
+        notificationButton.setText(notified ? "管理通知" : "开启通知");
         boolean exact = scheduler.canScheduleExact();
-        exactStatus.setText(exact ? "精确闹钟 · 可用" : "精确闹钟 · 未允许，提醒可能延迟");
-        exactButton.setVisibility(exact ? View.GONE : View.VISIBLE);
+        exactStatus.setText(exact ? "精确闹钟 · 已开启" : "精确闹钟 · 可选，未开启可能延迟");
+        renderNavigation();
         List<Reminder> items = store.list();
         items.sort(Comparator.comparing((Reminder r) -> r.fired).thenComparingLong(r -> r.matureAt));
         StringBuilder signature = new StringBuilder();
@@ -594,7 +782,6 @@ public class MainActivity extends Activity {
         if (items.isEmpty()) {
             LinearLayout empty = card(reminders, 10, 0xFFEDEFE6);
             addText(empty, "还没有成熟提醒", 17, INK, true, 0);
-            addText(empty, "开始监测后，请手动在微信打开好友农场的成熟时间详情。每次进入的首20秒内需识别到成熟倒计时，否则暂停截图；离开后重新进入或手动重启监测可重试。名称读不到不影响添加提醒；生长阶段倒计时不作为成熟时间。", 14, MUTED, false, 9);
             return;
         }
         SimpleDateFormat date = new SimpleDateFormat("yyyy年M月d日 HH:mm:ss", Locale.CHINA);
@@ -602,7 +789,7 @@ public class MainActivity extends Activity {
             LinearLayout row = card(reminders, 10, Color.WHITE);
             addText(row, r.fired ? "已提交提醒" : r.triggerAt <= now ? "提醒时间已到 · 待提交" : "待提醒", 12,
                     r.fired ? MUTED : GREEN, true, 0);
-            addText(row, blank(r.friend) ? "未命名好友" : r.friend, 20, INK, true, 8);
+            addText(row, blank(r.friend) ? "昵称未识别" : r.friend, 20, INK, true, 8);
             addText(row, "作物：" + (blank(r.crop) ? "未识别" : r.crop), 13, MUTED, false, 5);
             addText(row, "成熟  " + date.format(new Date(r.matureAt)), 14, INK, false, 13);
             addText(row, "提醒  " + date.format(new Date(r.triggerAt)), 12, MUTED, false, 5);
@@ -615,20 +802,18 @@ public class MainActivity extends Activity {
     }
 
     private String monitorStatusText(String status) {
-        if (blank(status)) return "未运行";
-        if ("已停止".equals(status)) return "监测已停止，已保存队列保留，需手动开始";
-        if ("STORAGE_FAILED".equals(status)) return "本地存储遇到问题，监测已停止；请检查存储空间后手动重试";
-        if ("OCR_TIMEOUT".equals(status)) return "图片识别超时，监测已停止；等待任务结束后手动开始";
-        if ("LOW_SPACE".equals(status)) return "存储空间不足，暂停新增截图";
-        if ("WRITE_FAILED".equals(status)) return "截图保存遇到问题，暂停新增截图";
-        if ("SERVICE_UNAVAILABLE".equals(status)) return "截图服务暂不可用，请检查服务连接";
-        if ("NOT_FOREGROUND".equals(status)) return "停止截图，已保存图片继续识别";
-        if ("CAPTURE_NO_MATCH_TIMEOUT".equals(status))
-            return "首20秒未识别到成熟倒计时，已暂停截图；离开后重新进入或手动重启监测可重试，已保存图片继续识别";
-        if (!ShizukuTaskGate.isEnabled(this) && status.startsWith("等待微信前台"))
-            return "等待使用记录中的微信小程序容器线索；请手动进入农场。判断可能延迟，已保存图片继续识别";
-        if (status.startsWith("处理完成:")) return "图片处理完成，不代表已添加提醒";
-        return status;
+        if (blank(status)) return "等待进入小程序";
+        if (status.contains("CAPTURE_NO_MATCH_TIMEOUT")) return "20 秒未识别，已暂停截图";
+        if (status.contains("LOW_SPACE")) return "空间不足，已暂停截图";
+        if (status.contains("WRITE_FAILED") || status.contains("保存")) return "保存遇到问题，请查看工具";
+        if (status.contains("STORAGE_FAILED")) return "存储遇到问题，请查看工具";
+        if (status.contains("OCR_TIMEOUT")) return "识别超时，请稍后重试";
+        if (status.contains("SERVICE_UNAVAILABLE") || status.contains("服务断开") || status.contains("服务中断")) return "截图服务尚未就绪";
+        if (status.contains("等待") || status.contains("NOT_FOREGROUND")) return "等待进入小程序";
+        if (status.contains("失败") || status.contains("错误")) return "截图遇到问题，请查看工具";
+        if (status.contains("识别任务未结束")) return "等待上次识别完成";
+        if (status.contains("停止")) return "监测已停止，截图与提醒保留";
+        return "正在识别成熟时间";
     }
 
     private String capturePauseText(OcrProgress progress, boolean running, boolean connected) {
@@ -652,8 +837,8 @@ public class MainActivity extends Activity {
     }
 
     private boolean canChangeMode() {
-        return !FarmAccessibilityService.isRunning && !MonitorForegroundService.isActive
-                && !foregroundStartupPending;
+        return SetupFlowPolicy.canChangeMode(FarmAccessibilityService.isRunning,
+                MonitorForegroundService.isActive, foregroundStartupPending);
     }
 
     private RadioButton modeChoice(String text) {
@@ -682,7 +867,7 @@ public class MainActivity extends Activity {
     }
 
     private boolean blank(String text) { return text == null || text.trim().isEmpty(); }
-    private void showFeedback(String message) { feedback.setText(message); feedback.setVisibility(View.VISIBLE); }
+    private void showFeedback(String message) { showMessage(message); }
     private void showMessage(String message) { Toast.makeText(this, message, Toast.LENGTH_LONG).show(); }
     private int dp(float value) { return Math.round(value * getResources().getDisplayMetrics().density); }
     private LinearLayout column() {

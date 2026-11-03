@@ -1,0 +1,82 @@
+package com.local.farmreminder;
+
+import org.junit.Test;
+import static org.junit.Assert.*;
+import static com.local.farmreminder.SetupFlowPolicy.Step.*;
+
+public class SetupFlowPolicyTest {
+    @Test public void firstMissingPermissionStartsWithMode() {
+        assertEquals(MODE, next(false, false, false, false, false, false, false, false));
+    }
+
+    @Test public void usageOnlyNeedsUsageAccess() {
+        assertEquals(SOURCE, next(true, false, false, true, true, true, true, false));
+        assertEquals(READY, next(true, false, true, false, true, true, true, false));
+    }
+
+    @Test public void shizukuDoesNotNeedUsageAccessAndAcceptsEitherGrantedIdentity() {
+        assertEquals(READY, next(true, true, false, true, true, true, true, false));
+        assertEquals(SOURCE, next(true, true, true, false, true, true, true, false));
+    }
+
+    @Test public void enabledButDisconnectedWaitsInsteadOfAskingToEnableAgain() {
+        assertEquals(WAITING, next(true, false, true, false, true, false, true, false));
+        assertEquals(SCREENSHOT, next(true, false, true, false, false, false, true, false));
+    }
+
+    @Test public void eachSettingsReturnIsReevaluatedFromCurrentFacts() {
+        assertEquals(SOURCE, next(true, false, false, false, false, false, false, false));
+        assertEquals(SCREENSHOT, next(true, false, true, false, false, false, false, false));
+        assertEquals(WAITING, next(true, false, true, false, true, false, false, false));
+        assertEquals(NOTIFICATIONS, next(true, false, true, false, true, true, false, false));
+        assertEquals(READY, next(true, false, true, false, true, true, true, false));
+    }
+
+    @Test public void deniedOrSkippedNotificationNeverBlocksRequiredReadiness() {
+        assertTrue(SetupFlowPolicy.requiredReady(NOTIFICATIONS));
+        assertEquals(READY, next(true, false, true, false, true, true, false, true));
+    }
+
+    @Test public void noExactAlarmPermissionIsNeededToReachReady() {
+        // Exact alarms deliberately are not an input to the required setup policy.
+        assertEquals(READY, next(true, false, true, false, true, true, true, false));
+    }
+
+    @Test public void existingAuthorizedInstallSkipsModeAndCompletedPermissions() {
+        assertEquals(READY, next(false, false, true, false, true, true, true, false));
+        assertEquals(READY, next(false, true, false, true, true, true, true, false));
+    }
+
+    @Test public void deferredNotificationsDoNotHideRevokedRequiredPermissions() {
+        assertEquals(SOURCE, next(true, false, false, false, true, true, false, true));
+        assertEquals(SCREENSHOT, next(true, false, true, false, false, true, false, true));
+        assertEquals(WAITING, next(true, false, true, false, true, false, false, true));
+    }
+
+    @Test public void runningServiceOrPendingStartLocksMode() {
+        assertTrue(SetupFlowPolicy.canChangeMode(false, false, false));
+        assertFalse(SetupFlowPolicy.canChangeMode(true, false, false));
+        assertFalse(SetupFlowPolicy.canChangeMode(false, true, false));
+        assertFalse(SetupFlowPolicy.canChangeMode(false, false, true));
+    }
+
+    @Test public void readinessIsOnlyNavigationAndDoesNotContainStartAction() {
+        for (SetupFlowPolicy.Step step : SetupFlowPolicy.Step.values())
+            assertFalse(step.name().contains("START"));
+        // Rebuilding the same UI state only produces READY, never a start command.
+        for (int i = 0; i < 3; i++)
+            assertEquals(READY, next(true, false, true, false, true, true, true, false));
+    }
+
+    @Test public void oldAndroidCanStillVisitHomeButCannotPrepareCapture() {
+        assertEquals(UNSUPPORTED, SetupFlowPolicy.next(false, true, false, true, false,
+                true, true, true, true));
+        assertFalse(SetupFlowPolicy.requiredReady(UNSUPPORTED));
+    }
+
+    private SetupFlowPolicy.Step next(boolean chosen, boolean shizuku, boolean usage,
+            boolean shizukuGranted, boolean enabled, boolean connected, boolean notified, boolean deferred) {
+        return SetupFlowPolicy.next(true, chosen, shizuku, usage, shizukuGranted,
+                enabled, connected, notified, deferred);
+    }
+}
