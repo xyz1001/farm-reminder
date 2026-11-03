@@ -26,14 +26,14 @@ import android.widget.RadioButton;
 import android.widget.RadioGroup;
 import android.widget.ScrollView;
 import android.widget.TextView;
-import android.widget.Toast;
 import java.lang.ref.WeakReference;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.util.HashSet;
+import java.util.Set;
 
 /** A local-only dashboard. Accessibility monitoring and reminders are independent. */
 public class MainActivity extends Activity {
@@ -64,6 +64,9 @@ public class MainActivity extends Activity {
     private long foregroundStartupDeadline;
     private String foregroundErrorBeforeStart = "";
     private String listSignature = "";
+    private String feedbackMessage = "";
+    private final Set<String> expandedGroups = new HashSet<>();
+    private boolean historyExpanded;
     private LinearLayout homePage, settingsPage, toolsPage, setupPage, navigation;
     private TextView homeMode, setupProgress, setupTitle, setupDetail;
     private LinearLayout setupModes;
@@ -94,6 +97,10 @@ public class MainActivity extends Activity {
         exportState.activity = new WeakReference<>(this);
         settings = getSharedPreferences("settings", MODE_PRIVATE);
         if (state != null) {
+            feedbackMessage = state.getString("feedbackMessage", "");
+            historyExpanded = state.getBoolean("historyExpanded", false);
+            ArrayList<String> expanded = state.getStringArrayList("expandedGroups");
+            if (expanded != null) expandedGroups.addAll(expanded);
             foregroundStartupPending = state.getBoolean("foregroundStartupPending", false);
             foregroundStartupDeadline = state.getLong("foregroundStartupDeadline", 0);
             foregroundErrorBeforeStart = state.getString("foregroundErrorBeforeStart", "");
@@ -171,7 +178,7 @@ public class MainActivity extends Activity {
         counts.addView(pending, new LinearLayout.LayoutParams(0, -2, 1));
         processedCount = addText(completed, "已识别 0 张", 17, INK, true, 0);
         pendingCount = addText(pending, "待处理 0 张", 17, INK, true, 0);
-        listTitle = addText(homePage, "已记录提醒 · 0", 21, INK, true, 30);
+        listTitle = addText(homePage, "待提醒 0 组", 21, INK, true, 30);
         reminders = column(); homePage.addView(reminders, spaced(-1, -2, 8));
 
         addText(toolsPage, "工具", 28, INK, true, 0);
@@ -260,8 +267,10 @@ public class MainActivity extends Activity {
                         }).show());
         button(settingsPage, "截图与隐私", false, 8, this::showPrivacy);
         buildSetupPanel();
-        feedback = addText(page, "", 13, GREEN, false, 12);
-        feedback.setVisibility(View.GONE);
+        feedback = addText(root, feedbackMessage, 13, GREEN, false, 0);
+        feedback.setPadding(dp(20), dp(10), dp(20), dp(10));
+        feedback.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        feedback.setVisibility(feedbackMessage.isEmpty() ? View.GONE : View.VISIBLE);
         navigation = new LinearLayout(this);
         navigation.setPadding(dp(14), dp(6), dp(14), dp(10));
         root.addView(navigation, new LinearLayout.LayoutParams(-1, -2));
@@ -314,7 +323,7 @@ public class MainActivity extends Activity {
             foregroundStartupPending = true;
             foregroundRequestFailed = false;
             foregroundStartupDeadline = SystemClock.uptimeMillis() + 5000;
-            feedback.setVisibility(View.GONE);
+            clearFeedback();
         } catch (RuntimeException e) {
             foregroundStartupPending = false;
             foregroundRequestFailed = true;
@@ -418,6 +427,7 @@ public class MainActivity extends Activity {
 
     private void performSetupAction() {
         SetupFlowPolicy.Step step = displayedStep;
+        clearFeedback();
         backStep = null;
         switch (step) {
             case MODE:
@@ -434,7 +444,6 @@ public class MainActivity extends Activity {
             case NOTIFICATIONS: requestNotificationPermission(); break;
             default: setupVisible = false; currentPage = "home"; reviewMode = false;
         }
-        feedback.setVisibility(View.GONE);
         refresh();
     }
 
@@ -452,7 +461,7 @@ public class MainActivity extends Activity {
                 backStep = SetupFlowPolicy.Step.SOURCE;
             }
         } else { currentPage = "home"; }
-        feedback.setVisibility(View.GONE);
+        clearFeedback();
         refresh();
     }
 
@@ -479,7 +488,7 @@ public class MainActivity extends Activity {
                 .setMessage("截图是整屏画面，切换页面、通知或覆盖层可能使截图包含其他应用或系统内容。请先关闭敏感页面。\n\n"
                         + "截图与 OCR 文字在本机保存，识别后仍保留，不自动删除或上传，可手动导出；诊断包可能含昵称等敏感信息，仅交给可信人员。停止监测会暂停截图和队列处理，保留图片与提醒。\n\n"
                         + "使用情况模式不能区分具体小游戏；Shizuku 模式按系统任务判断，支持已授权的 Root / Shell，权限范围更大，Root 风险更高。不读取无障碍节点或窗口列表，不监听界面事件。前台判断和截图并非同时完成，多窗口不可靠，不能保证只截农场或避免微信风控。\n\n"
-                        + "不会自动点击微信或操作游戏。每次进入前 20 秒未识别到成熟倒计时会暂停新增截图，可离开重进或手动重启监测。昵称未识别仍可记录。通知、振动和提醒时间受权限与系统设置影响。")
+                        + "不会自动点击微信或操作游戏。仅使用情况模式在每次进入前 20 秒未识别到成熟倒计时时暂停新增截图，可离开重进或手动重启监测；Shizuku 模式不受此限制。昵称未识别仍可记录。通知、振动和提醒时间受权限与系统设置影响。")
                 .setPositiveButton("知道了", null).show();
     }
 
@@ -563,6 +572,9 @@ public class MainActivity extends Activity {
     @Override public Object onRetainNonConfigurationInstance() { return exportState; }
 
     @Override protected void onSaveInstanceState(Bundle state) {
+        state.putString("feedbackMessage", feedbackMessage);
+        state.putBoolean("historyExpanded", historyExpanded);
+        state.putStringArrayList("expandedGroups", new ArrayList<>(expandedGroups));
         state.putBoolean("exportPicking", exportState.picking);
         state.putBoolean("exportBusy", exportState.busy);
         state.putBoolean("foregroundStartupPending", foregroundStartupPending);
@@ -689,7 +701,7 @@ public class MainActivity extends Activity {
         if (foregroundStartupPending) {
             if (foregroundActive) {
                 foregroundStartupPending = false;
-                feedback.setVisibility(View.GONE);
+                clearFeedback();
             } else if (newServiceError) {
                 foregroundStartupPending = false;
                 showFeedback("启动失败，请检查截图服务后重试");
@@ -759,7 +771,7 @@ public class MainActivity extends Activity {
         exactStatus.setText(exact ? "精确闹钟 · 已开启" : "精确闹钟 · 可选，未开启可能延迟");
         renderNavigation();
         List<Reminder> items = store.list();
-        items.sort(Comparator.comparing((Reminder r) -> r.fired).thenComparingLong(r -> r.matureAt));
+        ReminderListGroups groups = new ReminderListGroups(items);
         StringBuilder signature = new StringBuilder();
         long now = System.currentTimeMillis();
         boolean hasFired = false;
@@ -769,7 +781,7 @@ public class MainActivity extends Activity {
                     .append('|').append(r.matureAt).append('|').append(r.triggerAt)
                     .append('|').append(r.fired).append('|').append(r.triggerAt <= now).append('\n');
         }
-        listTitle.setText("已记录提醒 · " + items.size());
+        listTitle.setText(groups.title());
         clearButton.setVisibility(hasFired ? View.VISIBLE : View.GONE);
         String next = items.isEmpty() ? "empty" : signature.toString();
         if (next.equals(listSignature)) return;
@@ -781,25 +793,69 @@ public class MainActivity extends Activity {
             return;
         }
         SimpleDateFormat date = new SimpleDateFormat("yyyy年M月d日 HH:mm:ss", Locale.CHINA);
-        for (Reminder r : items) {
+        for (ReminderGrouping.Group group : groups.pending) {
             LinearLayout row = card(reminders, 10, Color.WHITE);
-            addText(row, r.fired ? "已提交提醒" : r.triggerAt <= now ? "提醒时间已到 · 待提交" : "待提醒", 12,
-                    r.fired ? MUTED : GREEN, true, 0);
-            addText(row, blank(r.friend) ? "昵称未识别" : r.friend, 20, INK, true, 8);
-            addText(row, "作物：" + (blank(r.crop) ? "未识别" : r.crop), 13, MUTED, false, 5);
-            addText(row, "成熟  " + date.format(new Date(r.matureAt)), 14, INK, false, 13);
-            addText(row, "提醒  " + date.format(new Date(r.triggerAt)), 12, MUTED, false, 5);
-            button(row, "删除这条提醒", false, 12, () -> new AlertDialog.Builder(this)
-                    .setTitle("删除这条提醒？").setMessage("记录会被移除，尚未触发的提醒也会取消。")
-                    .setNegativeButton("保留", null).setPositiveButton("删除", (d, w) -> {
-                        store.delete(r.id); refresh();
-                    }).show());
+            if (group.reminders.size() == 1) {
+                renderReminder(row, group.anchor(), date, now);
+                continue;
+            }
+            addText(row, group.due(now) ? "提醒时间已到 · 待提交" : "待提醒", 12, GREEN, true, 0);
+            addText(row, "最早成熟  " + date.format(new Date(group.anchor().matureAt)), 16, INK, true, 8);
+            addText(row, ReminderListGroups.summary(group), 14, MUTED, false, 6);
+            LinearLayout details = column();
+            Button toggle = button(row, "", false, 10, () -> {});
+            row.addView(details, spaced(-1, -2, 0));
+            for (Reminder r : group.reminders) {
+                LinearLayout detail = column();
+                detail.setPadding(0, dp(16), 0, dp(8));
+                details.addView(detail);
+                renderReminder(detail, r, date, now);
+            }
+            boolean expanded = expandedGroups.contains(group.identity);
+            details.setVisibility(expanded ? View.VISIBLE : View.GONE);
+            toggle.setText(expanded ? "收起明细" : "查看 " + group.reminders.size() + " 条明细");
+            toggle.setOnClickListener(v -> {
+                boolean open = details.getVisibility() != View.VISIBLE;
+                if (open) expandedGroups.add(group.identity); else expandedGroups.remove(group.identity);
+                details.setVisibility(open ? View.VISIBLE : View.GONE);
+                toggle.setText(open ? "收起明细" : "查看 " + group.reminders.size() + " 条明细");
+            });
         }
+        if (!groups.history.isEmpty()) {
+            Button toggle = button(reminders, "已提醒 · " + groups.history.size() + " 条 · "
+                    + (historyExpanded ? "收起" : "展开"), false, 16, () -> {});
+            LinearLayout history = column();
+            reminders.addView(history);
+            history.setVisibility(historyExpanded ? View.VISIBLE : View.GONE);
+            addText(history, "仅为历史记录，已提交不代表实际送达。", 12, MUTED, false, 8);
+            for (Reminder r : groups.history) renderReminder(card(history, 10, Color.WHITE), r, date, now);
+            toggle.setOnClickListener(v -> {
+                historyExpanded = !historyExpanded;
+                history.setVisibility(historyExpanded ? View.VISIBLE : View.GONE);
+                toggle.setText("已提醒 · " + groups.history.size() + " 条 · " + (historyExpanded ? "收起" : "展开"));
+            });
+        }
+    }
+
+    private void renderReminder(LinearLayout row, Reminder r, SimpleDateFormat date, long now) {
+        addText(row, r.fired ? "已提交提醒" : r.triggerAt <= now ? "提醒时间已到 · 待提交" : "待提醒", 12,
+                r.fired ? MUTED : GREEN, true, 0);
+        addText(row, ReminderListGroups.nickname(r), 20, INK, true, 8);
+        addText(row, "作物：" + (blank(r.crop) ? "未识别" : r.crop), 13, MUTED, false, 5);
+        addText(row, "成熟  " + date.format(new Date(r.matureAt)), 14, INK, false, 10);
+        addText(row, ReminderListGroups.lead(r) + " · " + date.format(new Date(r.triggerAt)), 12, MUTED, false, 5);
+        button(row, "删除这条提醒", false, 10, () -> new AlertDialog.Builder(this)
+                .setTitle("删除这条提醒？").setMessage(ReminderListGroups.nickname(r)
+                        + " · " + date.format(new Date(r.matureAt)) + "\n只删除此条记录，其他提醒保留；尚未触发的提醒也会取消。")
+                .setNegativeButton("保留", null).setPositiveButton("删除", (d, w) -> {
+                    store.delete(r.id); refresh();
+                }).show());
     }
 
     private String monitorStatusText(String status) {
         if (blank(status)) return "等待进入小程序";
-        if (status.contains("CAPTURE_NO_MATCH_TIMEOUT")) return "20 秒未识别，已暂停截图";
+        if (status.contains("CAPTURE_NO_MATCH_TIMEOUT")) return ShizukuTaskGate.isEnabled(this)
+                ? "等待农场前台，满足条件后继续截图" : "20 秒未识别，已暂停截图";
         if (status.contains("LOW_SPACE")) return "空间不足，已暂停截图";
         if (status.contains("WRITE_FAILED") || status.contains("保存")) return "保存遇到问题，请查看工具";
         if (status.contains("STORAGE_FAILED")) return "存储遇到问题，请查看工具";
@@ -828,8 +884,9 @@ public class MainActivity extends Activity {
         if ("NOT_FOREGROUND".equals(progress.pauseReason))
             return "当前不满足截图条件 · 停止截图，已保存图片继续识别";
         if (progress.capturePaused) return "新增截图已暂停 · 请查看监测状态，已保存图片保留";
-        return (ShizukuTaskGate.isEnabled(this) ? "农场系统任务条件满足时截图" : "小程序容器内截图")
-                + "，首20秒等待成熟倒计时 · 具体状态见监测状态，已保存图片按序处理";
+        return (ShizukuTaskGate.isEnabled(this) ? "农场系统任务条件满足时持续截图"
+                : "小程序容器内截图，首 20 秒等待成熟倒计时")
+                + " · 已保存图片按序处理";
     }
 
     private boolean canChangeMode() {
@@ -864,7 +921,17 @@ public class MainActivity extends Activity {
 
     private boolean blank(String text) { return text == null || text.trim().isEmpty(); }
     private void showFeedback(String message) { showMessage(message); }
-    private void showMessage(String message) { Toast.makeText(this, message, Toast.LENGTH_LONG).show(); }
+    private void showMessage(String message) {
+        feedbackMessage = message;
+        if (feedback != null) {
+            feedback.setText(message);
+            feedback.setVisibility(View.VISIBLE);
+        }
+    }
+    private void clearFeedback() {
+        feedbackMessage = "";
+        feedback.setVisibility(View.GONE);
+    }
     private int dp(float value) { return Math.round(value * getResources().getDisplayMetrics().density); }
     private LinearLayout column() {
         LinearLayout layout = new LinearLayout(this);
