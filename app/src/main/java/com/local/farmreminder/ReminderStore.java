@@ -9,7 +9,7 @@ import java.util.List;
 import java.util.UUID;
 
 public class ReminderStore {
-    private static final Object LOCK = new Object();
+    static final Object LOCK = new Object();
     private static final FrameCommitPolicy.Durability DURABILITY = new FrameCommitPolicy.Durability();
     private static final String RECEIPTS = "frameReceipts", CHECKPOINT = "frameCheckpoint";
     private final Context context;
@@ -44,12 +44,12 @@ public class ReminderStore {
     private boolean write(List<Reminder> items) throws Exception { return commit(prefs.edit().putString("items", serialize(items))); }
     public void delete(String id) { synchronized (LOCK) { try {
         if (!repairIfDirty()) return; List<Reminder> items = readStrict(); items.removeIf(r -> r.id.equals(id));
-        if (write(items)) new AlarmScheduler(context).cancel(id);
+        if (write(items)) { new AlarmScheduler(context).cancel(id); new AlarmScheduler(context).rescheduleAll(); }
     } catch (Exception ignored) { } } }
     public void clearFired() { synchronized (LOCK) { try {
         if (!repairIfDirty()) return; List<Reminder> items = readStrict(); List<String> ids = new ArrayList<>();
         for (Reminder r : items) if (r.fired) ids.add(r.id); items.removeIf(r -> r.fired);
-        if (write(items)) for (String id : ids) new AlarmScheduler(context).cancel(id);
+        if (write(items)) { for (String id : ids) new AlarmScheduler(context).cancel(id); new AlarmScheduler(context).rescheduleAll(); }
     } catch (Exception ignored) { } } }
     static final class AddResult {
         final SaveOutcome outcome; final Reminder reminder;
@@ -61,13 +61,26 @@ public class ReminderStore {
             List<Reminder> items = readStrict();
             if (RecognitionLogic.isDuplicate(items, friend, matureAt)) return new AddResult(SaveOutcome.DUPLICATE, null);
             Reminder r = makeReminder(friend, matureAt, leadSeconds); items.add(r);
-            boolean ok = write(items); return new AddResult(SaveOutcome.fromCommit(ok), ok ? r : null);
+            boolean ok = write(items);
+            if (ok) try { new AlarmScheduler(context).rescheduleAll(); } catch (RuntimeException ignored) { }
+            return new AddResult(SaveOutcome.fromCommit(ok), ok ? r : null);
         } catch (Exception e) { return new AddResult(SaveOutcome.FAILED, null); } }
     }
     Reminder markFired(String id) { synchronized (LOCK) { try {
         if (!repairIfDirty()) return null; List<Reminder> items = readStrict();
         for (Reminder r : items) if (r.id.equals(id) && !r.fired) { r.fired = true; return write(items) ? r : null; }
     } catch (Exception ignored) { } return null; } }
+
+    boolean markGroupFired(List<Reminder> group) { synchronized (LOCK) { try {
+        if (!repairIfDirty()) return false;
+        List<Reminder> items = readStrict();
+        java.util.Set<String> ids = new java.util.HashSet<>();
+        for (Reminder r : group) ids.add(r.id);
+        for (Reminder r : items) if (ids.contains(r.id)) r.fired = true;
+        return write(items);
+    } catch (Exception ignored) { return false; } } }
+
+    boolean ready() { synchronized (LOCK) { try { if (!repairIfDirty()) return false; readStrict(); return true; } catch (Exception e) { return false; } } }
 
     static final class FrameOutcome {
         final boolean committed, replay, confirmed, added;
@@ -131,6 +144,7 @@ public class ReminderStore {
             if (frame == null) return new FrameOutcome(false, false, false, false, java.util.Collections.emptyList(), "STORAGE_FAILED");
             FrameTransaction.Result r = FrameTransaction.commit(frameAdapter(), frame.id, frame.sessionId, frame.windowId,
                     frame.captureSequence, frame.captureUptimeMs, frame.captureWallMs, friend, countdownMs, leadSeconds);
+            if (r.committed && r.added) try { new AlarmScheduler(context).rescheduleAll(); } catch (RuntimeException ignored) { }
             return new FrameOutcome(r.committed, r.replay, r.confirmed, r.added, r.reminders, r.code);
         }
     }

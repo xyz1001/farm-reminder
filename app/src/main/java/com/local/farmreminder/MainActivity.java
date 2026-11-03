@@ -613,6 +613,7 @@ public class MainActivity extends Activity {
         if (requestCode != NOTIFICATIONS) return;
         if (results.length == 0) showMessage("已取消通知授权，可稍后在设置中开启。");
         else if (!notificationsAllowed()) showMessage("通知未开启，识别仍可使用；提醒通知和振动可能受限。");
+        else scheduler.rescheduleAll();
         refresh();
     }
 

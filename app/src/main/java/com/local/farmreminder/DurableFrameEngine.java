@@ -302,7 +302,7 @@ public final class DurableFrameEngine {
             ReminderStore.FrameOutcome outcome = reminders.commitFrame(frame, friend, countdown, lead);
             store.writeDiagnostic(frame, "result.properties", DiagnosticCodec.result(frame, friend, countdown, outcome));
             if (!outcome.committed) { fail(frame, "BUSINESS_FAILED", token, true); return; }
-            for (Reminder reminder : outcome.reminders) try { new AlarmScheduler(context).schedule(reminder); } catch (RuntimeException ignored) { }
+            try { new AlarmScheduler(context).rescheduleAll(); } catch (RuntimeException ignored) { }
             store.acknowledge(frame);
             reminders.forgetFrameReceipt(frame.id);
             main.post(() -> { if (fence.valid(token)) { Listener l = listener; if (l != null) l.onFrameResult(frame, lines, outcome, token); } });
