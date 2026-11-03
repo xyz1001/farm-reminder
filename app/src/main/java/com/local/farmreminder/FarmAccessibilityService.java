@@ -57,6 +57,9 @@ public class FarmAccessibilityService extends AccessibilityService {
     private long sceneEnters, sceneExits, recognizedEvents, added, saveFailures, frameFailures;
     private volatile String dumpSnapshot = "snapshot not yet available";
     private final LiveDiagnostics liveDiagnostics = new LiveDiagnostics();
+    private final EntryFeedbackDiagnostics entryFeedback = new EntryFeedbackDiagnostics();
+    private final java.util.Map<Long, android.widget.Toast> activeToasts = new java.util.HashMap<>();
+    private boolean entryDebug;
     private final BroadcastReceiver screenReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             if (alive() && isRunning) { updateForeground(); schedule(); }
@@ -74,10 +77,17 @@ public class FarmAccessibilityService extends AccessibilityService {
             boolean pending = containerPolicy.pending(frame.sessionId, epoch, frame.captureSequence);
             if (pending) {
                 boolean trusted = updateForeground() && captureSession.equals(frame.sessionId);
-                boolean identity = outcome.committed && !outcome.replay && trusted
-                        && FarmIdentityRecognition.classify(lines, frame.width, frame.height) != FarmIdentityRecognition.Outcome.NO_MATCH;
-                if (containerPolicy.result(frame.sessionId, epoch, frame.captureSequence, outcome.committed, outcome.replay, trusted, identity)
-                        && announcementPolicy.onAcceptedFrame()) announce();
+                FarmIdentityRecognition.Outcome classification = outcome.committed && !outcome.replay && trusted
+                        ? FarmIdentityRecognition.classify(lines, frame.width, frame.height) : null;
+                boolean identity = classification != null && classification != FarmIdentityRecognition.Outcome.NO_MATCH;
+                boolean accepted = containerPolicy.result(frame.sessionId, epoch, frame.captureSequence, outcome.committed, outcome.replay, trusted, identity);
+                EntryFeedbackDiagnostics.Reason why = accepted ? EntryFeedbackDiagnostics.Reason.NONE
+                        : !outcome.committed || outcome.replay ? EntryFeedbackDiagnostics.Reason.COMMIT_OR_REPLAY
+                        : !trusted ? EntryFeedbackDiagnostics.Reason.UNTRUSTED_FOREGROUND : EntryFeedbackDiagnostics.Reason.NO_IDENTITY;
+                if (accepted || containerPolicy.pending(frame.sessionId, epoch, frame.captureSequence)
+                        || containerPolicy.matches(frame.sessionId, epoch) && containerPolicy.state() == ContainerCapturePolicy.State.FAILED)
+                    entryFeedback.result(accepted, why, classification == null ? "NOT_RUN" : classification.name(), containerPolicy.state().name(), SystemClock.elapsedRealtime());
+                if (accepted) announceIfAllowed();
             }
             if (captureSession.equals(frame.sessionId)) acceptedSequences.remove(frame.captureSequence);
             if (outcome.committed && !outcome.replay) {
@@ -113,14 +123,42 @@ public class FarmAccessibilityService extends AccessibilityService {
             if (!alive() || !isRunning || engine == null || epoch != runEpoch || epoch != engine.epoch()) return;
             if (frame != null && containerPolicy.pending(frame.sessionId, epoch, frame.captureSequence)) {
                 containerPolicy.fail(frame.sessionId, epoch, frame.captureSequence);
+                entryFeedback.failure("WRITE_FAILED".equals(anonymousCode) || "STORAGE_FAILED".equals(anonymousCode) || "BUSINESS_FAILED".equals(anonymousCode)
+                        ? EntryFeedbackDiagnostics.Reason.WRITE_FAILURE : "OCR_FAILED".equals(anonymousCode)
+                        ? EntryFeedbackDiagnostics.Reason.OCR_FAILURE : EntryFeedbackDiagnostics.Reason.OTHER_FAILURE,
+                        containerPolicy.state().name(), SystemClock.elapsedRealtime());
                 onFrameFailure(anonymousCode, epoch);
                 reason = "USAGE_VERIFY_FAILED：首图处理失败，停止截图"; lastStatus = reason; publish(); schedule();
             } else onFrameFailure(anonymousCode, epoch);
         }
     };
 
+    private void announceIfAllowed() {
+        if (announcementPolicy.onAcceptedFrame()) announce();
+        else entryFeedback.reset(EntryFeedbackDiagnostics.Event.SUPPRESSED_BY_POLICY, SystemClock.elapsedRealtime());
+    }
     private void announce() {
-        android.widget.Toast.makeText(getApplicationContext(), "检测到已进入QQ经典农场，开始记录", android.widget.Toast.LENGTH_SHORT).show();
+        long request = entryFeedback.request(Build.VERSION.SDK_INT >= 30, SystemClock.elapsedRealtime());
+        long requestRun = entryFeedback.run(), requestStay = entryFeedback.stay();
+        try {
+            android.widget.Toast toast = android.widget.Toast.makeText(getApplicationContext(), "检测到已进入QQ经典农场，开始记录", android.widget.Toast.LENGTH_SHORT);
+            if (entryDebug && Build.VERSION.SDK_INT >= 30) {
+                toast.addCallback(new android.widget.Toast.Callback() {
+                    @Override public void onToastShown() {
+                        entryFeedback.callback(request, requestRun, requestStay, true, SystemClock.elapsedRealtime());
+                    }
+                    @Override public void onToastHidden() {
+                        entryFeedback.callback(request, requestRun, requestStay, false, SystemClock.elapsedRealtime());
+                        activeToasts.remove(request);
+                    }
+                });
+                activeToasts.put(request, toast);
+            }
+            toast.show();
+        } catch (RuntimeException e) {
+            activeToasts.remove(request);
+            entryFeedback.exception(request, e, SystemClock.elapsedRealtime());
+        }
     }
     private boolean alive() { return InstanceOwner.alive(instance, this, destroyed); }
     private static DurableFrameEngine engine(Context context) {
@@ -164,6 +202,8 @@ public class FarmAccessibilityService extends AccessibilityService {
         FarmAccessibilityService previous = instance;
         if (previous != null) previous.retire();
         instance = this; isConnected = true; isRunning = false;
+        entryDebug = (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+        entryFeedback.enable(entryDebug);
         AccessibilityServiceInfo info = getServiceInfo();
         if (info != null) {
             info.eventTypes = 0;
@@ -190,8 +230,10 @@ public class FarmAccessibilityService extends AccessibilityService {
         DurableFrameEngine e = engine(this);
         if (!e.start(listener)) { lastStatus = "识别任务未结束，请等待完成后重试"; reason = lastStatus; publish(); return; }
         runEpoch = e.epoch(); shizukuMode = ShizukuTaskGate.isEnabled(this); isRunning = true;
+        entryFeedback.start(shizukuMode ? "SHIZUKU" : "USAGE", SystemClock.elapsedRealtime());
         if (shizukuMode) ShizukuTaskGate.get(this).start();
         announcementPolicy.reset();
+        entryFeedback.reset(EntryFeedbackDiagnostics.Event.ANNOUNCEMENT_RESET, SystemClock.elapsedRealtime());
         getSharedPreferences("settings", MODE_PRIVATE).edit().putBoolean("monitoringEnabled", true).apply();
         newCaptureSession(); foreground = false; policy.invalidate();
         reason = shizukuMode ? "等待 Shizuku 前台任务" : "等待微信前台推断"; lastStatus = reason; updateForeground(); publish(); schedule();
@@ -203,6 +245,8 @@ public class FarmAccessibilityService extends AccessibilityService {
         isRunning = false; handler.removeCallbacks(sample); containerPolicy.clear(); foregroundKey = null; candidateClass = null; policy.invalidate();
         leaveScene(); foreground = false; newCaptureSession();
         announcementPolicy.reset();
+        entryFeedback.reset(EntryFeedbackDiagnostics.Event.ANNOUNCEMENT_RESET, SystemClock.elapsedRealtime());
+        entryFeedback.stop(SystemClock.elapsedRealtime());
         getSharedPreferences("settings", MODE_PRIVATE).edit().putBoolean("monitoringEnabled", false).apply();
         reason = "已停止"; lastStatus = reason; publish();
     }
@@ -270,7 +314,11 @@ public class FarmAccessibilityService extends AccessibilityService {
             ShizukuTaskGate gate = ShizukuTaskGate.get(this);
             shizukuSnapshot = gate.snapshot();
             if (gate.hasPermission() && shizukuSnapshot.age <= 1500
-                    && "NON_MATCH".equals(shizukuSnapshot.state)) announcementPolicy.confirmedDeparture();
+                    && "NON_MATCH".equals(shizukuSnapshot.state)) {
+                announcementPolicy.confirmedDeparture();
+                entryFeedback.budgetReset();
+                if (foreground) entryFeedback.reset(EntryFeedbackDiagnostics.Event.DEPARTURE_RESET, SystemClock.elapsedRealtime());
+            }
             key = ForegroundSourcePolicy.key(true, null, shizukuSnapshot.match,
                     shizukuSnapshot.age <= 1500, gate.hasPermission(), userUnlocked, screenInteractive,
                     screenLocked, shizukuSnapshot.key, shizukuSnapshot.component);
@@ -291,6 +339,8 @@ public class FarmAccessibilityService extends AccessibilityService {
             changed = containerPolicy.observe(key, departed);
             if (departed) {
                 announcementPolicy.confirmedDeparture();
+                entryFeedback.budgetReset();
+                if (foreground) entryFeedback.reset(EntryFeedbackDiagnostics.Event.DEPARTURE_RESET, SystemClock.elapsedRealtime());
                 if (foreground) leaveScene();
                 foreground = false; foregroundKey = null; candidateClass = null;
                 policy.invalidate();
@@ -299,15 +349,17 @@ public class FarmAccessibilityService extends AccessibilityService {
         if (changed) {
             if (foreground) leaveScene();
             if (shizukuMode) containerPolicy.clear();
-            if (!shizukuMode) announcementPolicy.confirmedDeparture();
+            if (!shizukuMode) { announcementPolicy.confirmedDeparture(); entryFeedback.reset(EntryFeedbackDiagnostics.Event.CHANGE_RESET, SystemClock.elapsedRealtime()); }
             newCaptureSession(); policy.invalidate();
             if (now) {
                 sceneEnters++;
                 containerPolicy.enter(captureSession, runEpoch, shizukuMode);
+                entryFeedback.enter(containerPolicy.state().name(), SystemClock.elapsedRealtime());
             }
         }
         boolean wasForeground = foreground;
         foreground = now; foregroundKey = key; candidateClass = className;
+        entryFeedback.foreground(now, containerPolicy.state().name());
         if (changed || wasForeground != now) {
             reason = now ? (shizukuMode ? "微信小程序容器观察中" : containerPolicy.state() == ContainerCapturePolicy.State.FAILED
                     ? "USAGE_VERIFY_REJECTED：首图验证未通过，停止截图" : containerPolicy.state() == ContainerCapturePolicy.State.VERIFIED
@@ -341,12 +393,13 @@ public class FarmAccessibilityService extends AccessibilityService {
         String session = captureSession; long sequence = ++captureSequence;
         long epoch = runEpoch;
         if (!containerPolicy.begin(session, epoch, sequence)) { capture.endCapture(request); schedule(); return; }
-        if (!currentCapture(session, epoch, sequence, request)) { containerPolicy.fail(session, epoch, sequence); capture.endCapture(request); schedule(); return; }
+        if (!currentCapture(session, epoch, sequence, request)) { failProbe(session, epoch, sequence, EntryFeedbackDiagnostics.Reason.STALE_RESULT); capture.endCapture(request); schedule(); return; }
+        if (containerPolicy.pending(session, epoch, sequence)) entryFeedback.probe(containerPolicy.state().name(), SystemClock.elapsedRealtime());
         policy.captured(now); armWatchdog(request, uptime);
         try {
             if (Build.VERSION.SDK_INT >= 30) takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, callback(session, epoch, sequence, request, uptime, wall));
         } catch (RuntimeException e) {
-            containerPolicy.fail(session, epoch, sequence); capture.endCapture(request); errors++; reason = "USAGE_VERIFY_FAILED：截图请求失败"; lastStatus = reason; publish(); schedule();
+            failProbe(session, epoch, sequence, EntryFeedbackDiagnostics.Reason.SCREENSHOT_FAILURE); capture.endCapture(request); errors++; reason = "USAGE_VERIFY_FAILED：截图请求失败"; lastStatus = reason; publish(); schedule();
         }
     }
     @android.annotation.TargetApi(30)
@@ -356,7 +409,7 @@ public class FarmAccessibilityService extends AccessibilityService {
                 HardwareBuffer buffer = result.getHardwareBuffer(); Bitmap hardware = null, copy = null;
                 boolean current = currentCapture(session, epoch, sequence, request);
                 try {
-                    if (!current) { containerPolicy.fail(session, epoch, sequence); return; }
+                    if (!current) { failProbe(session, epoch, sequence, EntryFeedbackDiagnostics.Reason.STALE_RESULT); return; }
                     long now = SystemClock.uptimeMillis(), wall = System.currentTimeMillis();
                     hardware = Bitmap.wrapHardwareBuffer(buffer, result.getColorSpace());
                     if (hardware == null) throw new IllegalStateException("empty screenshot");
@@ -372,11 +425,11 @@ public class FarmAccessibilityService extends AccessibilityService {
                     frame.captureWallMs = FramePipeline.captureWall(result.getTimestamp(), requestUptime, requestWall, now, wall);
                     frame.width = copy.getWidth(); frame.height = copy.getHeight();
                     hardware.recycle(); hardware = null; buffer.close(); buffer = null;
-                    if (!currentCapture(session, epoch, sequence, request)) { containerPolicy.fail(session, epoch, sequence); return; }
+                    if (!currentCapture(session, epoch, sequence, request)) { failProbe(session, epoch, sequence, EntryFeedbackDiagnostics.Reason.STALE_RESULT); return; }
                     engine(FarmAccessibilityService.this).accept(copy, frame); acceptedSequences.add(sequence); copy = null; screenshots++;
-                    if (shizukuMode && announcementPolicy.onAcceptedFrame()) announce();
+                    if (shizukuMode) announceIfAllowed();
                 } catch (RuntimeException e) {
-                    containerPolicy.fail(session, epoch, sequence); errors++;
+                    failProbe(session, epoch, sequence, EntryFeedbackDiagnostics.Reason.SCREENSHOT_FAILURE); errors++;
                     if (current && alive()) { reason = "USAGE_VERIFY_FAILED：截图保存交接失败"; lastStatus = reason; }
                 } finally {
                     capture.endCapture(request);
@@ -386,7 +439,7 @@ public class FarmAccessibilityService extends AccessibilityService {
             }
             @Override public void onFailure(int code) {
                 boolean current = currentCapture(session, epoch, sequence, request);
-                containerPolicy.fail(session, epoch, sequence); capture.endCapture(request);
+                failProbe(session, epoch, sequence, EntryFeedbackDiagnostics.Reason.SCREENSHOT_FAILURE); capture.endCapture(request);
                 if (current && alive()) {
                     errors++;
                     if (code == ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT) nextCaptureAllowed = SystemClock.elapsedRealtime() + 2000;
@@ -394,6 +447,11 @@ public class FarmAccessibilityService extends AccessibilityService {
                 } else if (alive() && isRunning) { publish(); schedule(); }
             }
         };
+    }
+    private void failProbe(String session, long epoch, long sequence, EntryFeedbackDiagnostics.Reason reason) {
+        boolean pending = containerPolicy.pending(session, epoch, sequence);
+        containerPolicy.fail(session, epoch, sequence);
+        if (pending) entryFeedback.failure(reason, containerPolicy.state().name(), SystemClock.elapsedRealtime());
     }
     private boolean currentCapture(String session, long epoch, long sequence, long request) {
         if (!CaptureAdmissionPolicy.allowed(capture.captureUsable(request), alive(), isRunning,
@@ -447,6 +505,10 @@ public class FarmAccessibilityService extends AccessibilityService {
     @Override protected void dump(FileDescriptor fd, PrintWriter writer, String[] args) {
         if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
             writer.println("local " + liveDiagnostics.serviceSnapshot(SystemClock.elapsedRealtime()));
+            writer.println("runtime running=" + isRunning + " connected=" + isConnected
+                    + " captureInFlight=" + capture.captureBusy() + " captureTimeout=" + capture.captureTimedOut()
+                    + " foregroundServiceErrorPresent=" + !MonitorForegroundService.lastError.isEmpty());
+            writer.println(entryFeedback.snapshot(SystemClock.elapsedRealtime()));
             writer.println("cachedPublished " + dumpSnapshot);
             ShizukuTaskGate gate = ShizukuTaskGate.peek();
             writer.println(gate == null ? "gate=not_initialized" : gate.debugSnapshot());
