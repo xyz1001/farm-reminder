@@ -487,8 +487,8 @@ public class MainActivity extends Activity {
         new AlertDialog.Builder(this).setTitle("截图与隐私")
                 .setMessage("截图是整屏画面，切换页面、通知或覆盖层可能使截图包含其他应用或系统内容。请先关闭敏感页面。\n\n"
                         + "截图与 OCR 文字在本机保存，识别后仍保留，不自动删除或上传，可手动导出；诊断包可能含昵称等敏感信息，仅交给可信人员。停止监测会暂停截图和队列处理，保留图片与提醒。\n\n"
-                        + "使用情况模式不能区分具体小游戏；Shizuku 模式按系统任务判断，支持已授权的 Root / Shell，权限范围更大，Root 风险更高。不读取无障碍节点或窗口列表，不监听界面事件。前台判断和截图并非同时完成，多窗口不可靠，不能保证只截农场或避免微信风控。\n\n"
-                        + "不会自动点击微信或操作游戏。仅使用情况模式在每次进入前 20 秒未识别到成熟倒计时时暂停新增截图，可离开重进或手动重启监测；Shizuku 模式不受此限制。昵称未识别仍可记录。通知、振动和提醒时间受权限与系统设置影响。")
+                        + "使用情况模式不能区分具体小游戏，首次验证截图可能是其他小游戏或页面，也会在本地保留、可导出；文字特征仅作启发式判断，验证通过后仍无法感知微信复用容器切换到其他小游戏。Shizuku 模式按系统任务判断，支持已授权的 Root / Shell，权限范围更大，Root 风险更高。不读取无障碍节点或窗口列表，不监听界面事件。前台判断和截图并非同时完成，多窗口不可靠，不能保证只截农场或避免微信风控。\n\n"
+                        + "不会自动点击微信或操作游戏。使用情况模式进入小程序候选后，仅截 1 张在本地验证；匹配农场加载页或自己家后才持续记录，未匹配或验证失败则本次停止截图。退出小程序后重进，或手动停止再开始，可重新验证。Shizuku 模式仍按农场系统任务条件持续截图。昵称未识别仍可记录。通知、振动和提醒时间受权限与系统设置影响。")
                 .setPositiveButton("知道了", null).show();
     }
 
@@ -854,8 +854,14 @@ public class MainActivity extends Activity {
 
     private String monitorStatusText(String status) {
         if (blank(status)) return "等待进入小程序";
+        if (!ShizukuTaskGate.isEnabled(this)) {
+            if (status.contains("USAGE_VERIFY_PENDING")) return "正在验证农场";
+            if (status.contains("USAGE_VERIFY_REJECTED")) return "未匹配农场，请退出小程序后重进";
+            if (status.contains("USAGE_VERIFY_FAILED")) return "验证失败，请退出小程序后重进";
+            if (status.contains("USAGE_VERIFY_READY")) return "已验证，正在记录";
+        }
         if (status.contains("CAPTURE_NO_MATCH_TIMEOUT")) return ShizukuTaskGate.isEnabled(this)
-                ? "等待农场前台，满足条件后继续截图" : "20 秒未识别，已暂停截图";
+                ? "等待农场前台，满足条件后继续截图" : "请重新开始监测";
         if (status.contains("LOW_SPACE")) return "空间不足，已暂停截图";
         if (status.contains("WRITE_FAILED") || status.contains("保存")) return "保存遇到问题，请查看工具";
         if (status.contains("STORAGE_FAILED")) return "存储遇到问题，请查看工具";
@@ -885,7 +891,7 @@ public class MainActivity extends Activity {
             return "当前不满足截图条件 · 停止截图，已保存图片继续识别";
         if (progress.capturePaused) return "新增截图已暂停 · 请查看监测状态，已保存图片保留";
         return (ShizukuTaskGate.isEnabled(this) ? "农场系统任务条件满足时持续截图"
-                : "小程序容器内截图，首 20 秒等待成熟倒计时")
+                : "进入小程序候选后单张验证，匹配加载页或自己家才持续记录")
                 + " · 已保存图片按序处理";
     }
 

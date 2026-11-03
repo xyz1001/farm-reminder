@@ -38,6 +38,9 @@ public final class DurableFrameEngine {
         void onStatus(String status);
         void onFatal(String status);
         void onFrameFailure(String anonymousCode, long processingEpoch);
+        default void onFrameFailure(DiskFrameStore.Frame frame, String anonymousCode, long processingEpoch) {
+            onFrameFailure(anonymousCode, processingEpoch);
+        }
         default void onMaturityRecognized(DiskFrameStore.Frame frame, long processingEpoch) { }
     }
     private static final long RESERVE = 128L * 1024 * 1024, TIMEOUT_MS = 12000;
@@ -60,6 +63,7 @@ public final class DurableFrameEngine {
     private volatile boolean lowSpace, writeFailed, writing, storageFailed = true;
     private Bitmap unsaved;
     private DiskFrameStore.Frame unsavedMetadata;
+    private long unsavedEpoch;
     private DiskFrameStore store;
     private TextRecognizer recognizer;
     private long processed, captured;
@@ -147,6 +151,7 @@ public final class DurableFrameEngine {
         synchronized (captureLock) {
             if (unsaved != null) throw new IllegalStateException("capture slot occupied; ownership not transferred");
             unsaved = image; unsavedMetadata = copyMetadata(metadata);
+            unsavedEpoch = fence.epoch();
             unsavedMetadata.imageFileName = ImageEncodingPolicy.fileName(Build.VERSION.SDK_INT);
             unsavedMetadata.imageHasAlpha = image.hasAlpha(); writing = true;
         }
@@ -160,8 +165,8 @@ public final class DurableFrameEngine {
         c.imageFileName = f.imageFileName; c.imageHasAlpha = f.imageHasAlpha; return c;
     }
     private void writeCapture() {
-        Bitmap bitmap; DiskFrameStore.Frame frame;
-        synchronized (captureLock) { bitmap = unsaved; frame = unsavedMetadata; }
+        Bitmap bitmap; DiskFrameStore.Frame frame; long token;
+        synchronized (captureLock) { bitmap = unsaved; frame = unsavedMetadata; token = unsavedEpoch; }
         if (bitmap == null) return;
         try {
             if (store == null) throw new IOException("store unavailable");
@@ -170,7 +175,7 @@ public final class DurableFrameEngine {
                     ImageEncodingPolicy.quality(Build.VERSION.SDK_INT), out));
             synchronized (captureLock) { unsaved = null; unsavedMetadata = null; writing = false; writeFailed = false; }
             bitmap.recycle(); captured++;
-        } catch (Exception e) { writing = false; writeFailed = true; }
+        } catch (Exception e) { writing = false; writeFailed = true; notifyFrameFailure(frame, "WRITE_FAILED", token); }
         try { scan(); } catch (Exception e) { storageFailed = true; update(); }
         schedulePump();
     }
@@ -288,18 +293,12 @@ public final class DurableFrameEngine {
             store.writeDiagnostic(frame, "ocr-lines.tsv", DiagnosticCodec.lines(rawLines));
             String friend = OcrFrameParser.reminderName(lines, frame.width, frame.height);
             List<Long> countdown = OcrFrameParser.countdowns(lines);
-            if (!countdown.isEmpty() && fence.valid(token)) {
-                Listener expected = listener;
-                main.post(() -> {
-                    if (fence.valid(token) && listener == expected && expected != null && listenerEpoch == token)
-                        expected.onMaturityRecognized(frame, token);
-                });
-            }
             store.writeDiagnostic(frame, "result.properties", DiagnosticCodec.result(frame, friend, countdown, null));
             int lead = context.getSharedPreferences("settings", Context.MODE_PRIVATE).getInt("leadSeconds", 60);
             admitted = fence.tryAdmitTransaction(token);
             if (!admitted) { returnPending(frame); return; }
-            ReminderStore.FrameOutcome outcome = reminders.commitFrame(frame, friend, countdown, lead);
+            ReminderStore.FrameOutcome outcome = reminders.commitFrame(frame, friend,
+                    FrameBusinessAdmission.countdowns(frame.captureMethod, countdown), lead);
             store.writeDiagnostic(frame, "result.properties", DiagnosticCodec.result(frame, friend, countdown, outcome));
             if (!outcome.committed) { fail(frame, "BUSINESS_FAILED", token, true); return; }
             try { new AlarmScheduler(context).rescheduleAll(); } catch (RuntimeException ignored) { }
@@ -315,8 +314,15 @@ public final class DurableFrameEngine {
         try {
             if (!admitted && !fence.valid(token)) { store.returnPending(frame); return; }
             store.fail(frame, code);
-            main.post(() -> { if (fence.shouldNotifyFailure(token)) { Listener l = listener; if (l != null) l.onFrameFailure(code, token); } });
+            notifyFrameFailure(frame, code, token);
         } catch (Exception e) { storageError(token); }
+    }
+    private void notifyFrameFailure(DiskFrameStore.Frame frame, String code, long token) {
+        Listener expected = listener;
+        main.post(() -> {
+            if (expected != null && listener == expected && listenerEpoch == token && fence.shouldNotifyFailure(token))
+                expected.onFrameFailure(frame, code, token);
+        });
     }
     private void returnPending(DiskFrameStore.Frame frame) {
         try { store.returnPending(frame); }

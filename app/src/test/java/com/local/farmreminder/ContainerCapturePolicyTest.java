@@ -4,45 +4,42 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class ContainerCapturePolicyTest {
-    @Test public void modeControlsDeadlineWithoutChangingForegroundAdmission() {
+    private ContainerCapturePolicy start() {
         ContainerCapturePolicy p = new ContainerCapturePolicy();
-        p.enter("shizuku", 1, 0, true);
-        assertTrue(p.allows(21000)); assertFalse(p.expire(21000));
-        assertTrue(p.recognize("shizuku", 1, true, 21000));
-        assertNull(ForegroundSourcePolicy.key(true, null, true, false, true, true, true, false, "task", "component"));
-        assertNull(ForegroundSourcePolicy.key(true, null, false, true, true, true, true, false, "task", "component"));
-        p.enter("usage", 1, 0, false);
-        assertFalse(p.allows(21000)); assertTrue(p.timedOut());
-        assertFalse(p.recognize("usage", 1, true, 21001));
+        assertTrue(p.observe("key", false)); p.enter("session", 7, false); return p;
     }
-    @Test public void announcementSurvivesUnknownButResetsOnConfirmedDepartureOrStop() {
-        CaptureAnnouncementPolicy p = new CaptureAnnouncementPolicy();
-        assertTrue(p.onAcceptedFrame());
-        // UNKNOWN and stale snapshots do not call confirmedDeparture.
-        assertFalse(p.onAcceptedFrame());
-        p.confirmedDeparture(); assertTrue(p.onAcceptedFrame());
-        assertFalse(p.onAcceptedFrame()); p.reset(); assertTrue(p.onAcceptedFrame());
+    @Test public void oneRequestAndPendingHandoffThenVerified() {
+        ContainerCapturePolicy p = start();
+        assertTrue(p.canRequest()); assertTrue(p.begin("session", 7, 1));
+        assertFalse(p.canRequest()); assertFalse(p.begin("session", 7, 2));
+        assertTrue(p.permitsHandoff("session", 7, 1)); assertFalse(p.permitsHandoff("session", 7, 2));
+        assertTrue(p.result("session", 7, 1, true, false, true, true)); assertTrue(p.canRequest());
     }
-    @Test public void deadlineIsInclusiveAndOnlyExpiresOnce() {
-        ContainerCapturePolicy p = new ContainerCapturePolicy(); p.enter("a", 1, 100);
-        assertTrue(p.allows(20099)); assertTrue(p.expire(20100));
-        assertFalse(p.expire(20101)); assertFalse(p.allows(999999));
-        assertFalse(p.recognize("a", 1, true, 20101));
+    @Test public void failureAndUnknownKeepBudgetUntilDepartureOrNewKey() {
+        ContainerCapturePolicy p = start(); p.begin("session", 7, 1);
+        assertFalse(p.result("session", 7, 1, true, false, true, false));
+        assertFalse(p.observe(null, false)); assertFalse(p.observe("key", false)); assertFalse(p.canRequest());
+        p.observe(null, true); assertTrue(p.observe("key", false)); p.enter("new", 7, false); assertTrue(p.canRequest());
+        p.begin("new", 7, 1); p.fail("new", 7, 1); assertFalse(p.canRequest());
+        assertTrue(p.observe("other", false)); p.enter("other", 7, false); assertTrue(p.canRequest());
+        p.clear(); assertTrue(p.observe("other", false)); p.enter("restart", 8, false); assertTrue(p.canRequest());
     }
-    @Test public void validObservationPassesWithoutRequiringAdditionOrName() {
-        ContainerCapturePolicy p = new ContainerCapturePolicy(); p.enter("a", 1, 0);
-        assertFalse(p.recognize("a", 1, false, 1)); // NO_MATCH
-        assertFalse(p.recognize("old", 1, true, 1));
-        assertFalse(p.recognize("a", 0, true, 1));
-        assertTrue(p.recognize("a", 1, true, 19999)); // duplicate also valid
-        assertTrue(p.allows(1000000)); assertFalse(p.expire(1000000));
+    @Test public void staleReplayAndUntrustedResultsCannotUnlock() {
+        ContainerCapturePolicy p = start(); p.begin("session", 7, 1);
+        assertFalse(p.result("old", 7, 1, true, false, true, true));
+        assertFalse(p.result("session", 6, 1, true, false, true, true));
+        assertFalse(p.result("session", 7, 2, true, false, true, true));
+        assertFalse(p.canRequest());
+        assertFalse(p.result("session", 7, 1, true, true, true, true)); assertFalse(p.canRequest());
+        p.enter("next", 7, false); p.begin("next", 7, 1);
+        assertFalse(p.result("next", 7, 1, true, false, false, true)); assertFalse(p.canRequest());
+        p.enter("third", 7, false); p.begin("third", 7, 1);
+        p.fail("old", 7, 1); assertEquals(ContainerCapturePolicy.State.PENDING, p.state());
+        p.fail("third", 7, 1); assertFalse(p.canRequest());
     }
-    @Test public void freshContextAndStopResetBudgetAndFenceOldTimer() {
-        ContainerCapturePolicy p = new ContainerCapturePolicy(); p.enter("a", 1, 0);
-        assertTrue(p.expire(20000)); p.enter("b", 1, 20001);
-        assertFalse(p.matches("a", 1)); assertFalse(p.recognize("a", 1, true, 20002));
-        assertTrue(p.allows(40000)); p.clear(); assertFalse(p.allows(40000));
-        p.enter("c", 2, 50000); assertFalse(p.matches("b", 1)); assertTrue(p.allows(69999));
-        assertFalse(p.recognize("c", 2, true, 70000)); assertTrue(p.expire(70000));
+    @Test public void shizukuDoesNotRequireIdentity() {
+        ContainerCapturePolicy p = new ContainerCapturePolicy(); p.enter("s", 1, true);
+        assertTrue(p.begin("s", 1, 1)); assertTrue(p.canRequest());
+        assertTrue(p.permitsHandoff("s", 1, 1)); assertTrue(p.begin("s", 1, 2));
     }
 }

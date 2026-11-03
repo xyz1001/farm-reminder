@@ -38,6 +38,11 @@ final class UsageForegroundPolicy {
     boolean canCapture(boolean permission, boolean unlocked, boolean interactive, boolean locked) {
         return candidate(permission, unlocked, interactive, locked) != null;
     }
+    enum State { CANDIDATE, CONFIRMED_NON_CANDIDATE, UNKNOWN }
+    State state(boolean permission, boolean unlocked, boolean interactive, boolean locked) {
+        if (!permission || !unlocked || !interactive || locked || invalid || ambiguous || !sawEvent || active.size() != 1) return State.UNKNOWN;
+        return candidate(permission, unlocked, interactive, locked) == null ? State.CONFIRMED_NON_CANDIDATE : State.CANDIDATE;
+    }
     static final class Candidate {
         final String className;
         final long resumeTimestamp;

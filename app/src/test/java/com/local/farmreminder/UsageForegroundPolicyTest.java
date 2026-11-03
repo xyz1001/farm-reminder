@@ -97,4 +97,18 @@ public class UsageForegroundPolicyTest {
         assertFalse(CaptureAdmissionPolicy.allowed(true, true, true, false, "a", "a"));
         assertFalse(CaptureAdmissionPolicy.allowed(true, false, true, true, "a", "a"));
     }
+    @Test public void triStateOnlyExplicitSingleNonCandidateConfirmsDeparture() {
+        UsageForegroundPolicy p = new UsageForegroundPolicy();
+        assertEquals(UsageForegroundPolicy.State.UNKNOWN, p.state(true, true, true, false));
+        p.event(1, WX, APP, UsageForegroundPolicy.RESUMED);
+        assertEquals(UsageForegroundPolicy.State.CANDIDATE, p.state(true, true, true, false));
+        assertEquals(UsageForegroundPolicy.State.UNKNOWN, p.state(false, true, true, false));
+        assertEquals(UsageForegroundPolicy.State.UNKNOWN, p.state(true, true, true, true));
+        p.event(2, WX, APP, UsageForegroundPolicy.PAUSED);
+        assertEquals(UsageForegroundPolicy.State.UNKNOWN, p.state(true, true, true, false));
+        p.event(3, OTHER, "B", UsageForegroundPolicy.RESUMED);
+        assertEquals(UsageForegroundPolicy.State.CONFIRMED_NON_CANDIDATE, p.state(true, true, true, false));
+        p.event(4, WX, APP, UsageForegroundPolicy.RESUMED);
+        assertEquals(UsageForegroundPolicy.State.UNKNOWN, p.state(true, true, true, false));
+    }
 }
