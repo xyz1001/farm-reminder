@@ -55,6 +55,7 @@ public class FarmAccessibilityService extends AccessibilityService {
     private long captureSequence, runEpoch, nextCaptureAllowed, screenshots, errors;
     private long sceneEnters, sceneExits, recognizedEvents, added, saveFailures, frameFailures;
     private volatile String dumpSnapshot = "snapshot not yet available";
+    private final LiveDiagnostics liveDiagnostics = new LiveDiagnostics();
     private final BroadcastReceiver screenReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             if (alive() && isRunning) { updateForeground(); schedule(); }
@@ -206,6 +207,7 @@ public class FarmAccessibilityService extends AccessibilityService {
     }
     private void newCaptureSession() { captureSession = UUID.randomUUID().toString(); captureSequence = 0; acceptedSequences.clear(); }
     private void readDeviceState() {
+        liveDiagnostics.deviceRead(SystemClock.elapsedRealtime());
         usagePermission = false; screenInteractive = false; screenLocked = true; userUnlocked = false;
         try {
             UserManager user = (UserManager) getSystemService(USER_SERVICE);
@@ -315,6 +317,7 @@ public class FarmAccessibilityService extends AccessibilityService {
         handler.postDelayed(sample, Math.max(0, Math.max(policy.next(now), nextCaptureAllowed) - now));
     }
     private void sample() {
+        liveDiagnostics.sample(SystemClock.elapsedRealtime());
         if (!alive() || !isRunning) return;
         if (!updateForeground()) { schedule(); return; }
         checkDeadline();
@@ -421,15 +424,20 @@ public class FarmAccessibilityService extends AccessibilityService {
                 + " captureTimeout=" + capture.captureTimedOut() + " diskQueued=" + p.queued + " failed=" + p.failedCount
                 + " cleanup=" + p.cleanupPendingCount + " retained=" + p.retainedBytes + " writing=" + p.writing
                 + " pauseReason=" + p.pauseReason + " recognizing=" + p.recognizing + " errors=" + errors
-                + " source=" + (shizukuMode ? "shizuku" : "usage")
-                + (shizukuMode ? " shizukuStatus=" + ShizukuTaskGate.get(this).status()
-                    + " snapshotAge=" + (shizukuSnapshot == null ? "none" : shizukuSnapshot.age)
-                    + " snapshotReason=" + (shizukuSnapshot == null ? "none" : shizukuSnapshot.reason) : "")
+                 + " source=" + (shizukuMode ? "shizuku" : "usage")
+                 + (shizukuMode ? " shizukuStatus=" + ShizukuTaskGate.get(this).status()
+                     + " snapshotAgeAtPublish=" + (shizukuSnapshot == null ? "none" : shizukuSnapshot.age) : "")
                 + " usagePermission=" + usagePermission + " screenInteractive=" + screenInteractive
                 + " screenLocked=" + screenLocked + " userUnlocked=" + userUnlocked;
+        liveDiagnostics.published(SystemClock.elapsedRealtime());
     }
     @Override protected void dump(FileDescriptor fd, PrintWriter writer, String[] args) {
-        if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) writer.println(dumpSnapshot);
+        if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            writer.println("local " + liveDiagnostics.serviceSnapshot(SystemClock.elapsedRealtime()));
+            writer.println("cachedPublished " + dumpSnapshot);
+            ShizukuTaskGate gate = ShizukuTaskGate.peek();
+            writer.println(gate == null ? "gate=not_initialized" : gate.debugSnapshot());
+        }
     }
     @Override public void onDestroy() {
         if (alive()) { stopSession(true); detachListener(); isConnected = false; instance = null; lastStatus = "服务断开，请重新启动监测"; }
