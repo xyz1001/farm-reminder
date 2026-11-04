@@ -14,11 +14,14 @@ import java.util.List;
 
 public class AlarmReceiver extends BroadcastReceiver {
     @Override public void onReceive(Context context, Intent intent) {
+        AlarmTimingDiagnostics.Sample timing = AlarmTimingDiagnostics.from(intent);
+        AlarmTimingDiagnostics.record(context, timing, AlarmTimingHistory.Event.RECEIVE, AlarmTimingHistory.Mode.UNKNOWN,
+                -1, -1, -1, null, System.currentTimeMillis(), android.os.SystemClock.elapsedRealtime());
         Uri data = intent.getData();
         if (data == null || !"farmreminder".equals(data.getScheme()) || data.getPathSegments().size() != 1) return;
         String id = data.getLastPathSegment();
         if ("alarm".equals(data.getAuthority())) {
-            if ("test".equals(id)) { try { notify(context, id, null); } catch (RuntimeException ignored) { } }
+            if ("test".equals(id)) { try { notifyMeasured(context, id, null, timing); } catch (RuntimeException ignored) { } }
             else new AlarmScheduler(context).rescheduleAll(); // Legacy broadcasts must never dispatch individually.
             return;
         }
@@ -27,10 +30,22 @@ public class AlarmReceiver extends BroadcastReceiver {
         synchronized (ReminderStore.LOCK) { AlarmScheduler.delivered(id); AlarmDispatchPolicy.dispatch(ReminderStore.LOCK, new AlarmDispatchPolicy.Adapter() {
             public boolean ready() { return store.ready(); }
             public List<Reminder> list() { return store.list(); }
-            public boolean notifyGroup(ReminderGrouping.Group group) { return AlarmReceiver.notify(context, group.identity, group.reminders); }
+            public boolean notifyGroup(ReminderGrouping.Group group) { return AlarmReceiver.notifyMeasured(context, group.identity, group.reminders, timing); }
             public boolean markFired(List<Reminder> reminders) { return store.markGroupFired(reminders); }
             public void reconcile() { new AlarmScheduler(context).rescheduleAll(); }
         }, id, System.currentTimeMillis()); }
+    }
+
+    private static boolean notifyMeasured(Context context, String id, List<Reminder> reminders, AlarmTimingDiagnostics.Sample timing) {
+        long started = android.os.SystemClock.elapsedRealtime();
+        boolean success = false; RuntimeException failure = null;
+        try { success = notify(context, id, reminders); return success; }
+        catch (RuntimeException e) { failure = e; throw e; }
+        finally {
+            long elapsed = android.os.SystemClock.elapsedRealtime();
+            AlarmTimingDiagnostics.record(context, timing, AlarmTimingHistory.Event.NOTIFY, AlarmTimingHistory.Mode.UNKNOWN,
+                    -1, success ? 1 : 0, Math.max(0, elapsed - started), failure, System.currentTimeMillis(), elapsed);
+        }
     }
 
     private static boolean notify(Context context, String id, List<Reminder> reminders) {

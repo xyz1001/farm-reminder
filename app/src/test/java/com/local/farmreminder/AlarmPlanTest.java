@@ -8,11 +8,11 @@ public class AlarmPlanTest {
     private static Reminder reminder(String id, long maturity, long trigger) {
         Reminder r = new Reminder(); r.id = id; r.matureAt = maturity; r.triggerAt = trigger; return r;
     }
-    private static final class Backend implements AlarmPlan.Backend {
+    private static class Backend implements AlarmPlan.Backend {
         Set<String> recorded = new HashSet<>(); Map<String, Long> alarms = new HashMap<>();
-        int attempts; boolean fail;
+        int attempts; boolean fail, failRecord;
         public Set<String> recorded() { return recorded; }
-        public boolean record(Set<String> ids) { recorded = new HashSet<>(ids); return true; }
+        public boolean record(Set<String> ids) { if (failRecord) return false; recorded = new HashSet<>(ids); return true; }
         public void cancel(String id) { alarms.remove(id); }
         public boolean schedule(String id, long at) { attempts++; if (fail) return false; alarms.put(id, at); return true; }
     }
@@ -51,5 +51,55 @@ public class AlarmPlanTest {
         String next = ReminderGrouping.plan(s.items).get(0).identity;
         assertEquals(Long.valueOf(600), s.backend.alarms.get(next));
         assertTrue(s.deliver(next, 3000)); assertEquals(1, s.notifications); assertTrue(b.fired);
+    }
+    @Test public void capabilityUpgradeAndGrantRearmWithoutChangingTrigger() {
+        State s = new State(); s.items.add(reminder("a", 1000, 500));
+        String id = ReminderGrouping.plan(s.items).get(0).identity;
+        s.plan.capability(false, false); s.reconcile(); assertEquals(1, s.backend.attempts);
+        s.plan.capability(false, false); s.reconcile(); assertEquals(1, s.backend.attempts);
+        s.plan.capability(true, false); s.reconcile(); assertEquals(2, s.backend.attempts);
+        assertEquals(Long.valueOf(500), s.backend.alarms.get(id));
+        s.plan.capability(true, false); s.reconcile(); assertEquals(2, s.backend.attempts);
+        s.plan.capability(true, true); s.reconcile(); assertEquals(3, s.backend.attempts);
+        s.plan.capability(true, false); s.reconcile(); assertEquals(3, s.backend.attempts);
+        s.plan.capability(false, false); s.reconcile(); assertEquals(3, s.backend.attempts);
+        s.plan.capability(false, true); s.reconcile(); assertEquals(3, s.backend.attempts);
+    }
+    @Test public void failedJournalDuringUpgradePreservesExistingAlarmAndRetries() {
+        State s = new State(); s.items.add(reminder("a", 1000, 500));
+        String id = ReminderGrouping.plan(s.items).get(0).identity;
+        s.plan.capability(false, false); s.reconcile();
+        Set<String> before = new HashSet<>(s.backend.recorded);
+        s.backend.failRecord = true; s.plan.capability(true, false); s.reconcile();
+        assertEquals(1, s.backend.attempts); assertEquals(before, s.backend.recorded);
+        assertEquals(Long.valueOf(500), s.backend.alarms.get(id));
+        s.backend.failRecord = false; s.reconcile(); assertEquals(2, s.backend.attempts);
+    }
+    @Test public void testFeedbackReflectsFailureWithoutExactPromise() {
+        assertTrue(AlarmPlan.testScheduleMessage(false).contains("未能安排"));
+        assertTrue(AlarmPlan.testScheduleMessage(true).contains("可能受系统限制延迟"));
+    }
+    @Test public void exactSecurityExceptionAndFallbackFailureRetryAtSameCapability() {
+        Reminder r = reminder("a", 1000, 500);
+        List<ReminderGrouping.Group> groups = ReminderGrouping.plan(Collections.singletonList(r));
+        AlarmPlan plan = new AlarmPlan();
+        Backend backend = new Backend() {
+            boolean available;
+            @Override public boolean schedule(String id, long at) {
+                attempts++;
+                if (!available) {
+                    try { throw new SecurityException(); }
+                    catch (SecurityException exactFailure) {
+                        try { throw new IllegalStateException(); }
+                        catch (RuntimeException fallbackFailure) { available = true; return false; }
+                    }
+                }
+                alarms.put(id, at); return true;
+            }
+        };
+        plan.capability(true, false); plan.reconcile(groups, backend);
+        assertEquals(1, backend.attempts); assertTrue(backend.alarms.isEmpty());
+        plan.capability(true, false); plan.reconcile(groups, backend);
+        assertEquals(2, backend.attempts); assertEquals(Long.valueOf(500), backend.alarms.get(groups.get(0).identity));
     }
 }

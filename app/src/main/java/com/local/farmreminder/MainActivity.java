@@ -256,8 +256,7 @@ public class MainActivity extends Activity {
 
         button(timing, "测试提醒 · 10 秒后", false, 13, () -> {
             try {
-                scheduler.scheduleTest(10);
-                showMessage("已安排，10 秒后短振动一次；可能受系统设置影响");
+                showMessage(AlarmPlan.testScheduleMessage(scheduler.scheduleTest(10)));
             } catch (RuntimeException e) { showMessage("测试未能安排，请检查设置"); }
         });
 
