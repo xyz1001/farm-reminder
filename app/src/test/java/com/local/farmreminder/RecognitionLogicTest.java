@@ -48,8 +48,9 @@ public class RecognitionLogicTest {
     @Test public void duplicateTolerance() {
         Reminder r = new Reminder(); r.friend = "小红"; r.matureAt = 100000;
         assertTrue(RecognitionLogic.isDuplicate(Collections.singletonList(r), "小红", 105000));
-        assertFalse(RecognitionLogic.isDuplicate(Collections.singletonList(r), "小红", 105001));
+        assertTrue(RecognitionLogic.isDuplicate(Collections.singletonList(r), "小红", 110000));
+        assertFalse(RecognitionLogic.isDuplicate(Collections.singletonList(r), "小红", 110001));
         assertFalse(RecognitionLogic.isDuplicate(Collections.singletonList(r), "小红", 150000));
-        assertFalse(RecognitionLogic.isDuplicate(Collections.singletonList(r), "小明", 100000));
+        assertTrue(RecognitionLogic.isDuplicate(Collections.singletonList(r), "小明", 100000));
     }
 }

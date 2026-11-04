@@ -12,12 +12,12 @@ public class ReminderGroupingTest {
         Reminder r = new Reminder(); r.id = id; r.friend = friend; r.matureAt = maturity; r.triggerAt = trigger; return r;
     }
     @Test public void strictWindowAndAnchorNotChained() {
-        Reminder a = r("a", "one", 1000000, 900000), b = r("b", "two", 1119999, 800000), c = r("c", "three", 1120000, 700000);
+        Reminder a = r("a", "one", 1000000, 900000), b = r("b", "two", 1010000, 800000), c = r("c", "three", 1010001, 700000);
         List<ReminderGrouping.Group> groups = ReminderGrouping.plan(Arrays.asList(c, b, a));
         assertEquals(2, groups.size()); assertEquals(Arrays.asList(a, b), groups.get(0).reminders);
         assertSame(c, groups.get(1).anchor()); assertEquals(900000, Reminder.scheduledTime(groups.get(0).anchor(), 1));
         assertEquals("two", groups.get(0).reminders.get(1).friend);
-        b.matureAt = 1090000; c.matureAt = 1180000;
+        b.matureAt = 1009000; c.matureAt = 1018000;
         assertEquals(2, ReminderGrouping.plan(Arrays.asList(a,b,c)).size());
     }
     @Test public void tieFiredAndMembershipIdentity() {

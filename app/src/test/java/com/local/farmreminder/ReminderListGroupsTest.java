@@ -17,9 +17,9 @@ public class ReminderListGroupsTest {
 
     @Test public void strictWindowAndFixedAnchorMatchDeliveryPlan() {
         Reminder a = record("a", 1000000, "甲", false);
-        Reminder b = record("b", 1119999, "乙", false);
-        Reminder c = record("c", 1120000, "丙", false);
-        Reminder d = record("d", 1239998, "丁", false);
+        Reminder b = record("b", 1010000, "乙", false);
+        Reminder c = record("c", 1010001, "丙", false);
+        Reminder d = record("d", 1020000, "丁", false);
         ReminderListGroups ui = new ReminderListGroups(Arrays.asList(d, c, b, a));
         assertEquals(2, ui.pending.size());
         assertEquals(Arrays.asList(a, b), ui.pending.get(0).reminders);
@@ -32,8 +32,8 @@ public class ReminderListGroupsTest {
 
     @Test public void neverChainsAcrossFirstAnchor() {
         Reminder a = record("a", 600000, "甲", false);
-        Reminder b = record("b", 690000, "乙", false);
-        Reminder c = record("c", 780000, "丙", false);
+        Reminder b = record("b", 609000, "乙", false);
+        Reminder c = record("c", 618000, "丙", false);
         ReminderListGroups ui = new ReminderListGroups(Arrays.asList(c, b, a));
         assertEquals(Arrays.asList(a, b), ui.pending.get(0).reminders);
         assertEquals(Collections.singletonList(c), ui.pending.get(1).reminders);
@@ -47,7 +47,7 @@ public class ReminderListGroupsTest {
         ReminderListGroups ui = new ReminderListGroups(records);
         assertEquals(Arrays.asList(a, b), ui.pending.get(0).reminders);
         assertEquals(Collections.singletonList(old), ui.history);
-        assertEquals("2 条提醒 · 甲、乙", ReminderListGroups.summary(ui.pending.get(0)));
+        assertEquals("好友 · 2 条提醒", ReminderListGroups.summary(ui.pending.get(0)));
         assertEquals(3, records.size());
         assertTrue(old.fired);
         assertFalse(a.fired);
@@ -60,14 +60,14 @@ public class ReminderListGroupsTest {
         Reminder d = record("d", 600000, "丙", false);
         ReminderListGroups ui = new ReminderListGroups(Arrays.asList(d, b, c, a));
         assertEquals(Arrays.asList(a, b, c, d), ui.pending.get(0).reminders);
-        assertEquals("4 条提醒 · 甲、乙 等", ReminderListGroups.summary(ui.pending.get(0)));
+        assertEquals("好友 · 4 条提醒", ReminderListGroups.summary(ui.pending.get(0)));
         assertEquals("待提醒 1 组", ui.title());
     }
 
     @Test public void deletingOneReplansWithoutRemovingOtherRecords() {
         Reminder a = record("a", 600000, "甲", false);
-        Reminder b = record("b", 690000, "乙", false);
-        Reminder c = record("c", 780000, "丙", false);
+        Reminder b = record("b", 609000, "乙", false);
+        Reminder c = record("c", 618000, "丙", false);
         List<Reminder> records = new ArrayList<>(Arrays.asList(a, b, c));
         assertEquals(2, new ReminderListGroups(records).pending.size());
         records.remove(a);
@@ -77,16 +77,57 @@ public class ReminderListGroupsTest {
         assertEquals(2, records.size());
     }
 
-    @Test public void emptyUnknownNickAndLeadAreReadable() {
+    @Test public void emptySummaryNeverNeedsUsernamesAndLeadIsReadable() {
         ReminderListGroups empty = new ReminderListGroups(Collections.emptyList());
         assertEquals("待提醒 0 组", empty.title());
         assertTrue(empty.pending.isEmpty()); assertTrue(empty.history.isEmpty());
         Reminder a = record("a", 600000, null, false);
         Reminder b = record("b", 600000, "  ", false);
         ReminderListGroups ui = new ReminderListGroups(Arrays.asList(a, b));
-        assertEquals("2 条提醒 · 昵称未识别", ReminderListGroups.summary(ui.pending.get(0)));
+        assertEquals("好友 · 2 条提醒", ReminderListGroups.summary(ui.pending.get(0)));
         assertEquals("提前 1 分钟提醒", ReminderListGroups.lead(a));
         a.triggerAt = a.matureAt;
         assertEquals("成熟时提醒", ReminderListGroups.lead(a));
+    }
+
+    @Test public void photoSelectionUsesEarliestValidPendingWithinGroupOnly() {
+        Reminder fired = record("f", 599999, "old", true); fired.avatarRef = "f".repeat(64);
+        Reminder invalid = record("a", 600000, "old", false); invalid.avatarRef = "../invalid";
+        Reminder b = record("b", 600001, "old", false); b.avatarRef = "b".repeat(64);
+        Reminder c = record("c", 600001, "old", false); c.avatarRef = "c".repeat(64);
+        Reminder outside = record("outside", 900000, "old", false); outside.avatarRef = "d".repeat(64);
+        ReminderListGroups ui = new ReminderListGroups(Arrays.asList(outside, c, b, invalid, fired));
+        assertEquals(b.avatarRef, ReminderListGroups.avatarRef(ui.pending.get(0)));
+        assertEquals(outside.avatarRef, ReminderListGroups.avatarRef(ui.pending.get(1)));
+        ReminderGrouping.Group group = new ReminderGrouping.Group(Arrays.asList(c, fired, b, invalid));
+        assertEquals(b.avatarRef, ReminderListGroups.avatarRef(group));
+        assertEquals("", ReminderListGroups.avatarRef(new ReminderGrouping.Group(Arrays.asList(fired, invalid))));
+        assertEquals("好友 · 4 条提醒", ReminderListGroups.summary(group));
+    }
+
+    @Test public void attachingOrChangingPhotoChangesSignatureButLegacyNicknameDoesNot() {
+        Reminder r = record("a", 600000, "old", false);
+        List<Reminder> records = Collections.singletonList(r);
+        String empty = ReminderListGroups.signature(records, 0);
+        r.avatarRef = "a".repeat(64);
+        String attached = ReminderListGroups.signature(records, 0);
+        assertNotEquals(empty, attached);
+        r.avatarRef = "b".repeat(64);
+        String changed = ReminderListGroups.signature(records, 0);
+        assertNotEquals(attached, changed);
+        r.friend = "different old name";
+        assertEquals(changed, ReminderListGroups.signature(records, 0));
+        assertNotEquals(changed, ReminderListGroups.signature(records, r.triggerAt));
+    }
+
+    @Test public void signatureIncludesOriginalRowIdentityAndCropUntilPhaseSix() {
+        Reminder r = record("a", 600000, "old", false);
+        List<Reminder> records = Collections.singletonList(r);
+        String original = ReminderListGroups.signature(records, 0);
+        r.id = "another";
+        assertNotEquals(original, ReminderListGroups.signature(records, 0));
+        String renamed = ReminderListGroups.signature(records, 0);
+        r.crop = "crop";
+        assertNotEquals(renamed, ReminderListGroups.signature(records, 0));
     }
 }

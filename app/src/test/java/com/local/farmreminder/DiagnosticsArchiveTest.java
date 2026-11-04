@@ -55,7 +55,7 @@ public class DiagnosticsArchiveTest {
         assertTrue(store.image(f).isFile()); assertNull(store.claimNext());
         Properties p = new Properties();
         try (InputStreamReader reader = new InputStreamReader(Files.newInputStream(new File(root, f.id + "/result.properties").toPath()), StandardCharsets.UTF_8)) { p.load(reader); }
-        assertEquals(f.id, p.getProperty("frameId")); assertEquals("名字", p.getProperty("selectedName"));
+        assertEquals(f.id, p.getProperty("frameId")); assertEquals("好友", p.getProperty("selectedName"));
         assertEquals("NO_MATCH", p.getProperty("code")); assertEquals("123,456", p.getProperty("countdownsMs"));
         String lines = new String(Files.readAllBytes(new File(root, f.id + "/ocr-lines.tsv").toPath()), StandardCharsets.UTF_8);
         assertTrue(lines.contains("昵称\\t一\\n二\\\\三\t1\t2\t3\t4"));

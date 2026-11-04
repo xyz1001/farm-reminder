@@ -24,7 +24,7 @@ final class DiagnosticCodec {
         p.setProperty("diagnosticSchema", "1"); p.setProperty("parserVersion", "1");
         p.setProperty("model", "MLKit Chinese 16.0.1"); p.setProperty("frameId", frame.id);
         p.setProperty("attempt", Integer.toString(frame.attempts));
-        p.setProperty("selectedName", friend == null ? "" : friend);
+        p.setProperty("selectedName", "好友");
         p.setProperty("countdownsMs", join(countdowns));
         p.setProperty("phase", outcome == null ? "OCR_COMPLETE" : "BUSINESS_COMPLETE");
         if (outcome != null) {

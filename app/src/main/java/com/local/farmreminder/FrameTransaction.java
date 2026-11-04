@@ -48,6 +48,10 @@ final class FrameTransaction {
     }
     static Result commit(Adapter adapter, String id, String session, int window, long sequence, long uptime,
                          long wall, String friend, List<Long> countdowns, int leadSeconds) {
+        return commit(adapter, id, session, window, sequence, uptime, wall, countdowns, leadSeconds, "");
+    }
+    static Result commit(Adapter adapter, String id, String session, int window, long sequence, long uptime,
+                         long wall, List<Long> countdowns, int leadSeconds, String avatarRef) {
         try {
             if (!adapter.repair() || id == null || id.isEmpty()) return failed();
             State state = adapter.read();
@@ -59,18 +63,16 @@ final class FrameTransaction {
                 return new Result(true, true, false, false, found, "REPLAY");
             }
             boolean confirmed = false, added = false;
-            List<Reminder> results = new ArrayList<>(), existing = new ArrayList<>(state.items);
-            List<Long> seen = new ArrayList<>();
-            if (countdowns != null) for (Long countdown : countdowns) {
-                FrameCommitPolicy.Checkpoint next = FrameCommitPolicy.reduce(null, id, session, window, sequence, uptime, wall, friend, countdown);
-                if (next.count == 0 || seen.contains(countdown)) continue;
-                seen.add(countdown); confirmed = true;
-                Reminder reminder = null;
-                for (Reminder r : existing) if (RecognitionLogic.isDuplicate(Collections.singletonList(r), next.friend, next.maturity)) { reminder = r; break; }
+            List<Reminder> results = new ArrayList<>();
+            MaturityIdentity identity = new MaturityIdentity(state.items);
+            for (long maturity : MaturityIdentity.maturities(wall, countdowns)) {
+                confirmed = true;
+                Reminder reminder = identity.match(maturity);
                 if (reminder == null) {
-                    reminder = new Reminder(); reminder.id = UUID.randomUUID().toString(); reminder.friend = next.friend; reminder.crop = "";
-                    reminder.matureAt = next.maturity; reminder.triggerAt = next.maturity - Math.max(0, leadSeconds) * 1000L;
-                    state.items.add(reminder); added = true;
+                    reminder = new Reminder(); reminder.id = UUID.randomUUID().toString(); reminder.friend = "好友"; reminder.crop = "";
+                    reminder.avatarRef = AvatarRefPolicy.normalize(avatarRef);
+                    reminder.matureAt = maturity; reminder.triggerAt = maturity - Math.max(0, leadSeconds) * 1000L;
+                    state.items.add(reminder); identity.addAnchor(reminder); added = true;
                 }
                 if (!results.contains(reminder)) results.add(reminder);
             }

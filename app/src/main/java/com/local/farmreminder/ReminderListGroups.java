@@ -2,9 +2,7 @@ package com.local.farmreminder;
 
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Set;
 
 /** Read-only list presentation; pending partitions always come from the alarm planner. */
 final class ReminderListGroups {
@@ -20,22 +18,34 @@ final class ReminderListGroups {
 
     String title() { return "待提醒 " + pending.size() + " 组"; }
 
-    static String nickname(Reminder reminder) {
-        return reminder.friend == null || reminder.friend.trim().isEmpty()
-                ? "昵称未识别" : reminder.friend.trim();
+    static String summary(ReminderGrouping.Group group) {
+        return "好友 · " + group.reminders.size() + " 条提醒";
     }
 
-    static String summary(ReminderGrouping.Group group) {
-        Set<String> names = new LinkedHashSet<>();
-        for (Reminder reminder : group.reminders) names.add(nickname(reminder));
-        StringBuilder text = new StringBuilder();
-        int count = 0;
-        for (String name : names) {
-            if (count == 2) break;
-            if (count++ > 0) text.append("、");
-            text.append(name.length() > 12 ? name.substring(0, 12) + "…" : name);
+    static String avatarRef(ReminderGrouping.Group group) {
+        List<Reminder> ordered = new ArrayList<>(group.reminders);
+        ordered.sort(Comparator.comparingLong((Reminder r) -> r.matureAt).thenComparing(r -> r.id));
+        for (Reminder r : ordered) {
+            String ref = AvatarRefPolicy.normalize(r.avatarRef);
+            if (!r.fired && !ref.isEmpty()) return ref;
         }
-        return group.reminders.size() + " 条提醒 · " + text + (names.size() > 2 ? " 等" : "");
+        return "";
+    }
+
+    /** Includes identity and the opaque avatar key so attaching/changing a photo rebuilds its row. */
+    static String signature(List<Reminder> records, long now) {
+        StringBuilder out = new StringBuilder();
+        for (Reminder r : records) {
+            append(out, r.id); append(out, r.crop); append(out, r.avatarRef);
+            out.append(r.matureAt).append('|').append(r.triggerAt).append('|')
+                    .append(r.fired).append('|').append(r.triggerAt <= now).append(';');
+        }
+        return records.isEmpty() ? "empty" : out.toString();
+    }
+
+    private static void append(StringBuilder out, String value) {
+        String text = value == null ? "" : value;
+        out.append(text.length()).append(':').append(text).append('|');
     }
 
     static String lead(Reminder reminder) {

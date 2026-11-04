@@ -19,6 +19,7 @@ public class FrameTransactionTest {
         FrameTransaction.State target = new FrameTransaction.State();
         for (Reminder r : source.items) {
             Reminder n = new Reminder(); n.id = r.id; n.friend = r.friend; n.crop = r.crop;
+            n.avatarRef = r.avatarRef;
             n.matureAt = r.matureAt; n.triggerAt = r.triggerAt; n.fired = r.fired; target.items.add(n);
         }
         for (Map.Entry<String, FrameTransaction.Receipt> e : source.receipts.entrySet()) target.receipts.put(e.getKey(), e.getValue());
@@ -113,12 +114,12 @@ public class FrameTransactionTest {
     @Test public void batchIsAtomicAndReplayRetainsEveryReminder() throws Exception {
         Shared shared = new Shared(); Adapter adapter = new Adapter(shared);
         FrameTransaction.Result first = FrameTransaction.commit(adapter, "batch", "s", 1, 1, 1, 1000,
-                "Alice", Arrays.asList(10000L, 14000L), 10);
+                "Alice", Arrays.asList(10000L, 21000L), 10);
         assertTrue(first.confirmed); assertTrue(first.added); assertEquals(2, first.reminders.size());
         assertEquals(2, shared.disk.items.size());
         reopen(shared);
         FrameTransaction.Result replay = FrameTransaction.commit(adapter, "batch", "s", 1, 1, 1, 1000,
-                "Alice", Arrays.asList(10000L, 14000L), 10);
+                "Alice", Arrays.asList(10000L, 21000L), 10);
         assertTrue(replay.replay); assertFalse(replay.added); assertFalse(replay.confirmed);
         assertEquals(2, replay.reminders.size()); assertEquals(2, shared.disk.items.size());
     }
@@ -130,10 +131,8 @@ public class FrameTransactionTest {
         FrameTransaction.Result batch = FrameTransaction.commit(adapter, "batch", "other", 9, 99, 21000, 1000,
                 "Alice", Arrays.asList(10000L, 30000L), 10);
         assertTrue(batch.added); assertEquals(2, batch.reminders.size()); assertEquals(2, shared.disk.items.size());
-        assertFalse(FrameTransaction.commit(adapter, "bad", "s", 1, 2, 2, 1000,
-                null, Collections.singletonList(0L), 10).confirmed);
-        FrameTransaction.Result zero = FrameTransaction.commit(adapter, "zero", "s", 1, 3, 3, 1000,
-                "Bob", Collections.singletonList(0L), 10);
+        FrameTransaction.Result zero = FrameTransaction.commit(new Adapter(new Shared()), "zero", "s", 1, 3, 3, 1000,
+                null, Collections.singletonList(0L), 10);
         assertTrue(zero.added); assertEquals(1000, zero.reminder.matureAt);
         assertEquals(2001, Reminder.scheduledTime(zero.reminder, 1001));
     }
@@ -141,11 +140,44 @@ public class FrameTransactionTest {
     @Test public void failedBatchRepairPersistsAllBeforeReplay() {
         Shared shared = new Shared(); Adapter adapter = new Adapter(shared); shared.failWrite = true;
         assertFalse(FrameTransaction.commit(adapter, "batch", "s", 1, 1, 1, 1000,
-                "Alice", Arrays.asList(10000L, 14000L), 10).committed);
+                "Alice", Arrays.asList(10000L, 21000L), 10).committed);
         assertEquals(0, shared.disk.items.size()); assertEquals(2, shared.memory.items.size());
         shared.failWrite = false;
         FrameTransaction.Result replay = FrameTransaction.commit(adapter, "batch", "s", 1, 1, 1, 1000,
-                "Alice", Arrays.asList(10000L, 14000L), 10);
+                "Alice", Arrays.asList(10000L, 21000L), 10);
         assertTrue(replay.replay); assertEquals(2, replay.reminders.size()); assertEquals(2, shared.disk.items.size());
+    }
+    @Test public void unsortedBatchFixedAnchorsReplayAndOptionalAvatar() throws Exception {
+        Shared shared = new Shared(); Adapter adapter = new Adapter(shared);
+        String ref = "a".repeat(64);
+        FrameTransaction.Result first = FrameTransaction.commit(adapter, "batch", "s", 1, 1, 1, 1000,
+                Arrays.asList(18000L, 9000L, 0L), 10, ref);
+        assertTrue(first.added); assertEquals(2, first.reminders.size());
+        assertEquals(1000, first.reminders.get(0).matureAt); assertEquals(19000, first.reminders.get(1).matureAt);
+        assertEquals("好友", first.reminder.friend); assertEquals(ref, first.reminder.avatarRef);
+        FrameTransaction.Result next = FrameTransaction.commit(adapter, "next", "s", 1, 2, 2, 1000,
+                Collections.singletonList(16000L), 10, "b".repeat(64));
+        assertFalse(next.added); assertEquals(19000, next.reminder.matureAt); assertEquals(ref, next.reminder.avatarRef);
+        reopen(shared);
+        FrameTransaction.Result replay = FrameTransaction.commit(adapter, "batch", "s", 1, 1, 1, 1000,
+                Collections.singletonList(90000L), 10, "b".repeat(64));
+        assertTrue(replay.replay); assertEquals(ref, replay.reminder.avatarRef);
+        assertTrue(FrameTransaction.forgetAfterAck(adapter, "batch"));
+    }
+    @Test public void missingOrInvalidAvatarDoesNotBlockReminder() {
+        Shared shared = new Shared(); Adapter adapter = new Adapter(shared);
+        FrameTransaction.Result result = FrameTransaction.commit(adapter, "asset-failed", "s", 1, 1, 1, 1000,
+                Collections.singletonList(0L), 10, "../unsafe");
+        assertTrue(result.committed); assertTrue(result.added); assertEquals("", result.reminder.avatarRef);
+    }
+    @Test public void firedLegacyDuplicateNeverRevivedOrAvatarBackfilled() throws Exception {
+        Shared shared = new Shared(); Reminder old = new Reminder(); old.id = "legacy"; old.friend = "old name"; old.crop = "old crop";
+        old.matureAt = 20000; old.triggerAt = 15000; old.fired = true; old.avatarRef = "";
+        shared.memory.items.add(old); shared.disk = copy(shared.memory);
+        FrameTransaction.Result result = FrameTransaction.commit(new Adapter(shared), "duplicate", "s", 1, 1, 1, 1000,
+                Collections.singletonList(19000L), 10, "a".repeat(64));
+        assertTrue(result.committed); assertFalse(result.added); assertTrue(result.reminder.fired);
+        assertEquals("", result.reminder.avatarRef); assertEquals("old name", result.reminder.friend);
+        assertEquals("old crop", result.reminder.crop); assertEquals(15000, result.reminder.triggerAt);
     }
 }

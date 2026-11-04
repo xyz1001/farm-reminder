@@ -50,7 +50,6 @@ public final class RecognitionLogic {
     public void reset() { candidateFriend = null; candidateMaturity = 0; count = 0; }
 
     public static boolean isDuplicate(List<Reminder> reminders, String friend, long matureAt) {
-        for (Reminder r : reminders) if (friend.equals(r.friend) && Math.abs(r.matureAt - matureAt) <= 5000) return true;
-        return false;
+        return new MaturityIdentity(reminders).match(matureAt) != null;
     }
 }

@@ -55,7 +55,7 @@ public class OcrFrameTest {
         };
         FrameTransaction.Result result = FrameTransaction.commit(adapter, "frame", "session", 1, 1, 1000, 1000,
                 OcrFrameParser.reminderName(lines,1240,2772), OcrFrameParser.countdowns(lines), 60);
-        assertTrue(result.committed); assertTrue(result.added); assertEquals("昵称未识别", result.reminder.friend);
+        assertTrue(result.committed); assertTrue(result.added); assertEquals("好友", result.reminder.friend);
         assertEquals(1034000L, result.reminder.matureAt);
         FrameTransaction.Result duplicate = FrameTransaction.commit(adapter, "frame2", "session", 1, 2, 1000, 1000,
                 OcrFrameParser.reminderName(lines,1240,2772), OcrFrameParser.countdowns(lines), 60);

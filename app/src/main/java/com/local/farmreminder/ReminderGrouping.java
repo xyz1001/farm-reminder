@@ -9,7 +9,7 @@ import java.util.List;
 
 /** Deterministic partitions of pending reminders, bounded by each group's first maturity. */
 final class ReminderGrouping {
-    static final long WINDOW_MS = 120000L;
+    static final long WINDOW_MS = MaturityIdentity.WINDOW_MS;
     static final class Group {
         final List<Reminder> reminders;
         final String identity;
@@ -32,18 +32,12 @@ final class ReminderGrouping {
         boolean due(long now) { return anchor().triggerAt <= now || anchor().matureAt <= now; }
     }
     static List<Group> plan(List<Reminder> reminders) {
-        List<Reminder> pending = new ArrayList<>();
-        for (Reminder r : reminders) if (!r.fired) pending.add(r);
-        pending.sort(Comparator.comparingLong((Reminder r) -> r.matureAt).thenComparing(r -> r.id));
         List<Group> groups = new ArrayList<>();
-        List<Reminder> current = new ArrayList<>();
-        for (Reminder r : pending) {
-            if (!current.isEmpty() && (r.matureAt - current.get(0).matureAt < 0 || r.matureAt - current.get(0).matureAt >= WINDOW_MS)) {
-                groups.add(new Group(current)); current = new ArrayList<>();
-            }
-            current.add(r);
+        for (List<Reminder> partition : MaturityIdentity.partition(reminders)) {
+            List<Reminder> pending = new ArrayList<>();
+            for (Reminder r : partition) if (!r.fired) pending.add(r);
+            if (!pending.isEmpty()) groups.add(new Group(pending));
         }
-        if (!current.isEmpty()) groups.add(new Group(current));
         return groups;
     }
 }

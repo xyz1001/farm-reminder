@@ -29,6 +29,7 @@ public class ReminderStore {
         for (int i = 0; i < a.length(); i++) {
             JSONObject o = a.getJSONObject(i); Reminder r = new Reminder();
             r.id = o.getString("id"); r.friend = o.optString("friend", ""); r.crop = o.optString("crop", "");
+            r.avatarRef = AvatarRefPolicy.normalize(o.optString("avatarRef", ""));
             r.matureAt = o.getLong("matureAt"); r.triggerAt = o.getLong("triggerAt"); r.fired = o.optBoolean("fired"); result.add(r);
         }
         return result;
@@ -37,7 +38,7 @@ public class ReminderStore {
         JSONArray a = new JSONArray();
         for (Reminder r : items) {
             JSONObject o = new JSONObject(); o.put("id", r.id); o.put("friend", r.friend); o.put("crop", r.crop);
-            o.put("matureAt", r.matureAt); o.put("triggerAt", r.triggerAt); o.put("fired", r.fired); a.put(o);
+            o.put("matureAt", r.matureAt); o.put("triggerAt", r.triggerAt); o.put("fired", r.fired); o.put("avatarRef", AvatarRefPolicy.normalize(r.avatarRef)); a.put(o);
         }
         return a.toString();
     }
@@ -60,7 +61,7 @@ public class ReminderStore {
             if (!repairIfDirty()) return new AddResult(SaveOutcome.FAILED, null);
             List<Reminder> items = readStrict();
             if (RecognitionLogic.isDuplicate(items, friend, matureAt)) return new AddResult(SaveOutcome.DUPLICATE, null);
-            Reminder r = makeReminder(friend, matureAt, leadSeconds); items.add(r);
+            Reminder r = makeReminder("好友", matureAt, leadSeconds); items.add(r);
             boolean ok = write(items);
             if (ok) try { new AlarmScheduler(context).rescheduleAll(); } catch (RuntimeException ignored) { }
             return new AddResult(SaveOutcome.fromCommit(ok), ok ? r : null);
@@ -140,10 +141,21 @@ public class ReminderStore {
         return commitFrame(frame, friend, countdownMs == null ? java.util.Collections.emptyList() : java.util.Collections.singletonList(countdownMs), leadSeconds);
     }
     FrameOutcome commitFrame(DiskFrameStore.Frame frame, String friend, List<Long> countdownMs, int leadSeconds) {
+        return commitFrame(frame, countdownMs, leadSeconds, "");
+    }
+    boolean mayAddFrame(DiskFrameStore.Frame frame, List<Long> countdowns) { synchronized (LOCK) {
+        try {
+            if (frame == null || !repairIfDirty() || readReceipts().has(frame.id)) return false;
+            MaturityIdentity identity = new MaturityIdentity(readStrict());
+            for (long maturity : MaturityIdentity.maturities(frame.captureWallMs, countdowns)) if (identity.match(maturity) == null) return true;
+        } catch (Exception ignored) { }
+        return false;
+    } }
+    FrameOutcome commitFrame(DiskFrameStore.Frame frame, List<Long> countdownMs, int leadSeconds, String avatarRef) {
         synchronized (LOCK) {
             if (frame == null) return new FrameOutcome(false, false, false, false, java.util.Collections.emptyList(), "STORAGE_FAILED");
             FrameTransaction.Result r = FrameTransaction.commit(frameAdapter(), frame.id, frame.sessionId, frame.windowId,
-                    frame.captureSequence, frame.captureUptimeMs, frame.captureWallMs, friend, countdownMs, leadSeconds);
+                    frame.captureSequence, frame.captureUptimeMs, frame.captureWallMs, countdownMs, leadSeconds, avatarRef);
             if (r.committed && r.added) try { new AlarmScheduler(context).rescheduleAll(); } catch (RuntimeException ignored) { }
             return new FrameOutcome(r.committed, r.replay, r.confirmed, r.added, r.reminders, r.code);
         }

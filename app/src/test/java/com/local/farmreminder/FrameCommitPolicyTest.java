@@ -27,8 +27,8 @@ public class FrameCommitPolicyTest {
         assertEquals(2, frame(first, "2", "s", 1, 2, 200, 1100, "other", 9900L).count);
         assertEquals(2, frame(first, "2", "s", 1, 2, 200, 1100, "friend", 16000L).count);
         assertEquals(2, frame(first, "old", "s", 1, 1, 50, 900, "friend", 10100L).count);
-        assertEquals(0, frame(first, "2", "s", 1, 2, 200, 1100, null, 9900L).count);
-        assertEquals(0, frame(first, "2", "s", 1, 2, 200, 1100, " ", 9900L).count);
+        assertEquals(2, frame(first, "2", "s", 1, 2, 200, 1100, null, 9900L).count);
+        assertEquals(2, frame(first, "2", "s", 1, 2, 200, 1100, " ", 9900L).count);
         assertEquals(0, frame(first, "2", "s", 1, 2, 200, 1100, "friend", null).count);
         assertEquals(2, frame(first, "2", "s", 1, 2, 200, 1100, "friend", 0L).count);
         FrameCommitPolicy.Checkpoint empty = frame(first, "2", "s", 1, 2, 200, 1100, null, null);

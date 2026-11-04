@@ -21,6 +21,7 @@ import android.provider.Settings;
 import android.view.View;
 import android.view.WindowInsets;
 import android.widget.Button;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.RadioButton;
 import android.widget.RadioGroup;
@@ -57,6 +58,7 @@ public class MainActivity extends Activity {
     private TextView vibrationHint, setupVibrationHint;
     private ExportState exportState;
     private LinearLayout reminders;
+    private AvatarViewBinder avatars;
     private SharedPreferences settings;
     private ReminderStore store;
     private AlarmScheduler scheduler;
@@ -124,6 +126,7 @@ public class MainActivity extends Activity {
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
                 | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
         buildScreen();
+        avatars = new AvatarViewBinder(this, reminders);
         if (state == null) {
             setupVisible = setupStep() != SetupFlowPolicy.Step.READY;
             reviewMode = setupStep() == SetupFlowPolicy.Step.MODE;
@@ -724,6 +727,7 @@ public class MainActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        if (avatars != null) avatars.close();
         if (Build.VERSION.SDK_INT >= 33 && backCallback != null)
             getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(backCallback);
         if (exportState.activity.get() == this) exportState.activity.clear();
@@ -824,20 +828,17 @@ public class MainActivity extends Activity {
         renderNavigation();
         List<Reminder> items = store.list();
         ReminderListGroups groups = new ReminderListGroups(items);
-        StringBuilder signature = new StringBuilder();
         long now = System.currentTimeMillis();
         boolean hasFired = false;
         for (Reminder r : items) {
             hasFired |= r.fired;
-            signature.append(r.id).append('|').append(r.friend).append('|').append(r.crop)
-                    .append('|').append(r.matureAt).append('|').append(r.triggerAt)
-                    .append('|').append(r.fired).append('|').append(r.triggerAt <= now).append('\n');
         }
         listTitle.setText(groups.title());
         clearButton.setVisibility(hasFired ? View.VISIBLE : View.GONE);
-        String next = items.isEmpty() ? "empty" : signature.toString();
+        String next = ReminderListGroups.signature(items, now);
         if (next.equals(listSignature)) return;
         listSignature = next;
+        avatars.clearRows();
         reminders.removeAllViews();
         if (items.isEmpty()) {
             LinearLayout empty = card(reminders, 10, 0xFFEDEFE6);
@@ -852,8 +853,8 @@ public class MainActivity extends Activity {
                 continue;
             }
             addText(row, group.due(now) ? "提醒时间已到 · 待提交" : "待提醒", 12, GREEN, true, 0);
-            addText(row, "最早成熟  " + date.format(new Date(group.anchor().matureAt)), 16, INK, true, 8);
-            addText(row, ReminderListGroups.summary(group), 14, MUTED, false, 6);
+            renderAvatarTime(row, group.anchor(), ReminderListGroups.avatarRef(group),
+                    ReminderListGroups.summary(group), "最早成熟");
             LinearLayout details = column();
             Button toggle = button(row, "", false, 10, () -> {});
             row.addView(details, spaced(-1, -2, 0));
@@ -892,16 +893,36 @@ public class MainActivity extends Activity {
     private void renderReminder(LinearLayout row, Reminder r, SimpleDateFormat date, long now) {
         addText(row, r.fired ? "已提交提醒" : r.triggerAt <= now ? "提醒时间已到 · 待提交" : "待提醒", 12,
                 r.fired ? MUTED : GREEN, true, 0);
-        addText(row, ReminderListGroups.nickname(r), 20, INK, true, 8);
+        renderAvatarTime(row, r, r.avatarRef, "好友", "成熟");
         addText(row, "作物：" + (blank(r.crop) ? "未识别" : r.crop), 13, MUTED, false, 5);
-        addText(row, "成熟  " + date.format(new Date(r.matureAt)), 14, INK, false, 10);
         addText(row, ReminderListGroups.lead(r) + " · " + date.format(new Date(r.triggerAt)), 12, MUTED, false, 5);
         button(row, "删除这条提醒", false, 10, () -> new AlertDialog.Builder(this)
-                .setTitle("删除这条提醒？").setMessage(ReminderListGroups.nickname(r)
-                        + " · " + date.format(new Date(r.matureAt)) + "\n只删除此条记录，其他提醒保留；尚未触发的提醒也会取消。")
+                .setTitle("删除这条提醒？").setMessage("成熟时间：" + date.format(new Date(r.matureAt))
+                        + "\n只删除此条记录，其他提醒保留；尚未触发的提醒也会取消。")
                 .setNegativeButton("保留", null).setPositiveButton("删除", (d, w) -> {
                     store.delete(r.id); refresh();
                 }).show());
+    }
+
+    private void renderAvatarTime(LinearLayout row, Reminder reminder, String avatarRef, String label, String timeLabel) {
+        LinearLayout heading = new LinearLayout(this);
+        heading.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        row.addView(heading, spaced(-1, -2, 10));
+        ImageView image = new ImageView(this);
+        image.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        image.setPadding(dp(5), dp(5), dp(5), dp(5));
+        image.setBackground(background(0xFFF0F3EB, 12, 0xFFE0E6DA));
+        image.setClipToOutline(true);
+        heading.addView(image, new LinearLayout.LayoutParams(dp(60), dp(60)));
+        LinearLayout words = column();
+        LinearLayout.LayoutParams textLayout = new LinearLayout.LayoutParams(0, -2, 1);
+        textLayout.leftMargin = dp(13); heading.addView(words, textLayout);
+        addText(words, label, 12, MUTED, false, 0);
+        addText(words, timeLabel + " " + new SimpleDateFormat("HH:mm:ss", Locale.CHINA)
+                .format(new Date(reminder.matureAt)), 20, INK, true, 3);
+        addText(words, new SimpleDateFormat("yyyy年M月d日", Locale.CHINA)
+                .format(new Date(reminder.matureAt)), 12, MUTED, false, 3);
+        avatars.bind(image, avatarRef);
     }
 
     private String monitorStatusText(String status) {

@@ -102,4 +102,20 @@ public class AlarmPlanTest {
         plan.capability(true, false); plan.reconcile(groups, backend);
         assertEquals(2, backend.attempts); assertEquals(Long.valueOf(500), backend.alarms.get(groups.get(0).identity));
     }
+    @Test public void oldTwoMinuteJournalMigratesWithoutOrphanAndHonorsRecordFailure() {
+        Reminder a = reminder("a", 100000, 90000), b = reminder("b", 160000, 150000);
+        String old = new ReminderGrouping.Group(Arrays.asList(a, b)).identity;
+        List<ReminderGrouping.Group> groups = ReminderGrouping.plan(Arrays.asList(a, b));
+        assertEquals(2, groups.size());
+        Backend backend = new Backend(); backend.recorded.add(old); backend.alarms.put(old, 90000L);
+        AlarmPlan plan = new AlarmPlan(); backend.failRecord = true;
+        plan.reconcile(groups, backend);
+        assertTrue(backend.alarms.containsKey(old)); assertEquals(Collections.singleton(old), backend.recorded);
+        backend.failRecord = false; plan.reconcile(groups, backend);
+        assertFalse(backend.alarms.containsKey(old)); assertFalse(backend.recorded.contains(old));
+        for (ReminderGrouping.Group group : groups) {
+            assertTrue(backend.recorded.contains(group.identity));
+            assertEquals(Long.valueOf(group.anchor().triggerAt), backend.alarms.get(group.identity));
+        }
+    }
 }

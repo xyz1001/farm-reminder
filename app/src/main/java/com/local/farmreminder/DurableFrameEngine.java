@@ -300,15 +300,16 @@ public final class DurableFrameEngine {
         boolean admitted = false;
         try {
             store.writeDiagnostic(frame, "ocr-lines.tsv", DiagnosticCodec.lines(rawLines));
-            String friend = OcrFrameParser.reminderName(lines, frame.width, frame.height);
             List<Long> countdown = OcrFrameParser.countdowns(lines);
-            store.writeDiagnostic(frame, "result.properties", DiagnosticCodec.result(frame, friend, countdown, null));
+            store.writeDiagnostic(frame, "result.properties", DiagnosticCodec.result(frame, "好友", countdown, null));
             int lead = context.getSharedPreferences("settings", Context.MODE_PRIVATE).getInt("leadSeconds", 60);
+            List<Long> businessCountdown = FrameBusinessAdmission.countdowns(frame.captureMethod, countdown);
+            String avatar = !businessCountdown.isEmpty() && reminders.mayAddFrame(frame, businessCountdown)
+                    ? AvatarStore.saveFromFrame(context, store.image(frame), lines, frame.id) : "";
             admitted = fence.tryAdmitTransaction(token);
             if (!admitted) { returnPending(frame); return; }
-            ReminderStore.FrameOutcome outcome = reminders.commitFrame(frame, friend,
-                    FrameBusinessAdmission.countdowns(frame.captureMethod, countdown), lead);
-            store.writeDiagnostic(frame, "result.properties", DiagnosticCodec.result(frame, friend, countdown, outcome));
+            ReminderStore.FrameOutcome outcome = reminders.commitFrame(frame, businessCountdown, lead, avatar);
+            store.writeDiagnostic(frame, "result.properties", DiagnosticCodec.result(frame, "好友", countdown, outcome));
             if (!outcome.committed) { fail(frame, "BUSINESS_FAILED", token, true); return; }
             try { new AlarmScheduler(context).rescheduleAll(); } catch (RuntimeException ignored) { }
             store.acknowledge(frame);

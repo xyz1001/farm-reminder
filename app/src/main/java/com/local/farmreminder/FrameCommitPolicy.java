@@ -37,8 +37,8 @@ final class FrameCommitPolicy {
                              long uptime, long wall, String friend, Long countdown) {
         Checkpoint c = new Checkpoint(); c.frameId = id; c.sessionId = session; c.windowId = window;
         c.sequence = sequence; c.uptime = uptime; c.friend = "";
-        if (friend == null || friend.trim().isEmpty() || countdown == null || countdown < 0 || wall > Long.MAX_VALUE - countdown) return c;
-        c.friend = friend.trim(); c.maturity = wall + countdown; c.count = 2;
+        if (countdown == null || countdown < 0 || wall < 0 || wall > Long.MAX_VALUE - countdown) return c;
+        c.friend = "好友"; c.maturity = wall + countdown; c.count = 2;
         return c;
     }
 
