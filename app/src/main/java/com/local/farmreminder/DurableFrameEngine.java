@@ -304,11 +304,12 @@ public final class DurableFrameEngine {
             store.writeDiagnostic(frame, "result.properties", DiagnosticCodec.result(frame, "好友", countdown, null));
             int lead = context.getSharedPreferences("settings", Context.MODE_PRIVATE).getInt("leadSeconds", 60);
             List<Long> businessCountdown = FrameBusinessAdmission.countdowns(frame.captureMethod, countdown);
-            String avatar = !businessCountdown.isEmpty() && reminders.mayAddFrame(frame, businessCountdown)
-                    ? AvatarStore.saveFromFrame(context, store.image(frame), lines, frame.id) : "";
+            boolean mayAdd = !businessCountdown.isEmpty() && reminders.mayAddFrame(frame, businessCountdown);
+            String avatar = mayAdd ? AvatarStore.saveFromFrame(context, store.image(frame), lines, frame.id) : "";
+            String plate = mayAdd ? NameplateStore.saveFromFrame(context, store.image(frame), lines, frame.id) : "";
             admitted = fence.tryAdmitTransaction(token);
             if (!admitted) { returnPending(frame); return; }
-            ReminderStore.FrameOutcome outcome = reminders.commitFrame(frame, businessCountdown, lead, avatar);
+            ReminderStore.FrameOutcome outcome = reminders.commitFrame(frame, businessCountdown, lead, avatar, plate);
             store.writeDiagnostic(frame, "result.properties", DiagnosticCodec.result(frame, "好友", countdown, outcome));
             if (!outcome.committed) { fail(frame, "BUSINESS_FAILED", token, true); return; }
             try { new AlarmScheduler(context).rescheduleAll(); } catch (RuntimeException ignored) { }

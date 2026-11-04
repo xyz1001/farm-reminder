@@ -19,9 +19,10 @@ public class AlarmReceiver extends BroadcastReceiver {
     private static final class Prepared {
         final NotificationIdentityBinding.Snapshot snapshot;
         final Bitmap bitmap;
+        final Bitmap plate;
         final NotificationIdentityLabel label;
-        Prepared(NotificationIdentityBinding.Snapshot snapshot, Bitmap bitmap, NotificationIdentityLabel label) {
-            this.snapshot = snapshot; this.bitmap = bitmap; this.label = label;
+        Prepared(NotificationIdentityBinding.Snapshot snapshot, Bitmap bitmap, Bitmap plate, NotificationIdentityLabel label) {
+            this.snapshot = snapshot; this.bitmap = bitmap; this.plate = plate; this.label = label;
         }
     }
 
@@ -48,18 +49,20 @@ public class AlarmReceiver extends BroadcastReceiver {
                             }
                             return null;
                         }, snapshot -> {
-                            Bitmap bitmap = snapshot.avatar.isEmpty() ? null : AvatarStore.load(context, snapshot.avatar, 65536);
+                            Bitmap plate = snapshot.plate.isEmpty() ? null : NameplateStore.loadNotification(context, snapshot.plate);
+                            Bitmap bitmap = snapshot.avatar.isEmpty() || SystemClock.elapsedRealtime() >= entryElapsed + 2500
+                                    ? null : AvatarStore.load(context, snapshot.avatar, 65536);
                             NotificationIdentityLabel label = NotificationIdentityLabel.EMPTY;
                             if (!snapshot.source.isEmpty() && SystemClock.elapsedRealtime() < entryElapsed + 2250) {
                                 try { label = NotificationIdentityOcr.read(context, snapshot.source, entryElapsed + 2250); }
                                 catch (RuntimeException | OutOfMemoryError ignored) { }
                             }
-                            return new Prepared(snapshot, bitmap, label == null ? NotificationIdentityLabel.EMPTY : label);
+                            return new Prepared(snapshot, bitmap, plate, label == null ? NotificationIdentityLabel.EMPTY : label);
                         },
                                 SystemClock::elapsedRealtime, entryElapsed);
                     }
                     @Override public Prepared budgetExpired(Prepared prepared) {
-                        return prepared == null ? null : new Prepared(prepared.snapshot, prepared.bitmap, NotificationIdentityLabel.EMPTY);
+                        return prepared == null ? null : new Prepared(prepared.snapshot, prepared.bitmap, prepared.plate, NotificationIdentityLabel.EMPTY);
                     }
                     @Override public void deliver(Prepared prepared) {
                         dispatch(context, kind, id, timing, prepared);
@@ -70,7 +73,7 @@ public class AlarmReceiver extends BroadcastReceiver {
     private static void dispatch(Context context, String kind, String id,
                                  AlarmTimingDiagnostics.Sample timing, Prepared prepared) {
         if ("alarm".equals(kind)) {
-            if ("test".equals(id)) { try { notifyMeasured(context, id, null, null, NotificationIdentityLabel.EMPTY, timing); } catch (RuntimeException ignored) { } }
+            if ("test".equals(id)) { try { notifyMeasured(context, id, null, null, null, NotificationIdentityLabel.EMPTY, timing); } catch (RuntimeException ignored) { } }
             else new AlarmScheduler(context).rescheduleAll(); // Legacy broadcasts never dispatch individually.
             return;
         }
@@ -83,9 +86,10 @@ public class AlarmReceiver extends BroadcastReceiver {
                 public boolean notifyGroup(ReminderGrouping.Group group) {
                     NotificationIdentityBinding.Snapshot current = NotificationIdentityBinding.select(group.identity, group.reminders);
                     Bitmap bitmap = prepared != null && NotificationIdentityBinding.sameAvatar(prepared.snapshot, current) ? prepared.bitmap : null;
+                    Bitmap plate = prepared != null && NotificationIdentityBinding.samePlate(prepared.snapshot, current) ? prepared.plate : null;
                     NotificationIdentityLabel label = prepared != null && NotificationIdentityBinding.sameSource(prepared.snapshot, current)
                             ? prepared.label : NotificationIdentityLabel.EMPTY;
-                    return notifyMeasured(context, group.identity, group.reminders, bitmap, label, timing);
+                    return notifyMeasured(context, group.identity, group.reminders, bitmap, plate, label, timing);
                 }
                 public boolean markFired(List<Reminder> reminders) { return store.markGroupFired(reminders); }
                 public void reconcile() { new AlarmScheduler(context).rescheduleAll(); }
@@ -93,11 +97,11 @@ public class AlarmReceiver extends BroadcastReceiver {
         }
     }
 
-    private static boolean notifyMeasured(Context context, String id, List<Reminder> reminders, Bitmap avatar, NotificationIdentityLabel label,
+    private static boolean notifyMeasured(Context context, String id, List<Reminder> reminders, Bitmap avatar, Bitmap plate, NotificationIdentityLabel label,
                                           AlarmTimingDiagnostics.Sample timing) {
         long started = SystemClock.elapsedRealtime();
         boolean success = false; RuntimeException failure = null;
-        try { success = ReminderNotifier.post(context, id, reminders, avatar, label); return success; }
+        try { success = ReminderNotifier.post(context, id, reminders, avatar, plate, label); return success; }
         catch (RuntimeException e) { failure = e; throw e; }
         finally {
             long elapsed = SystemClock.elapsedRealtime();

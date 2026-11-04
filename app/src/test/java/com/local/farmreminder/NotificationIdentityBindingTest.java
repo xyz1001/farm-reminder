@@ -36,4 +36,32 @@ public class NotificationIdentityBindingTest {
         a.sourceFrameRef = "../invalid";
         assertEquals("", NotificationIdentityBinding.select("g", Arrays.asList(a)).source);
     }
+    @Test public void plateWinsAndReferencesInvalidateIndependently() {
+        Reminder a = reminder("a", 1, A, S), b = reminder("b", 2, B, T);
+        b.plateRef = A;
+        NotificationIdentityBinding.Snapshot original = NotificationIdentityBinding.select("g", Arrays.asList(a, b));
+        assertEquals("b", original.id); assertEquals(T, original.source); assertEquals(B, original.avatar);
+        b.plateRef = B;
+        NotificationIdentityBinding.Snapshot changedPlate = NotificationIdentityBinding.select("g", Arrays.asList(a, b));
+        assertFalse(NotificationIdentityBinding.samePlate(original, changedPlate));
+        assertTrue(NotificationIdentityBinding.sameAvatar(original, changedPlate)); assertTrue(NotificationIdentityBinding.sameSource(original, changedPlate));
+        b.plateRef = A; b.avatarRef = A;
+        NotificationIdentityBinding.Snapshot changedAvatar = NotificationIdentityBinding.select("g", Arrays.asList(a, b));
+        assertFalse(NotificationIdentityBinding.sameAvatar(original, changedAvatar)); assertTrue(NotificationIdentityBinding.samePlate(original, changedAvatar));
+        b.sourceFrameRef = S;
+        NotificationIdentityBinding.Snapshot changedSource = NotificationIdentityBinding.select("g", Arrays.asList(a, b));
+        assertFalse(NotificationIdentityBinding.sameSource(original, changedSource)); assertTrue(NotificationIdentityBinding.samePlate(original, changedSource));
+        b.plateRef = "";
+        NotificationIdentityBinding.Snapshot newPrimary = NotificationIdentityBinding.select("g", Arrays.asList(a, b));
+        assertEquals("a", newPrimary.id); assertFalse(NotificationIdentityBinding.samePrimary(original, newPrimary));
+        assertFalse(NotificationIdentityBinding.samePlate(original, newPrimary)); assertFalse(NotificationIdentityBinding.sameAvatar(original, newPrimary));
+    }
+    @Test public void earliestValidPendingPlateBeatsAvatarAndIgnoresFiredOrBadPlate() {
+        Reminder a = reminder("a", 1, A, S), b = reminder("b", 5, "", T), c = reminder("c", 4, "", S);
+        a.plateRef = "../bad"; b.plateRef = B; c.plateRef = A;
+        NotificationIdentityBinding.Snapshot selected = NotificationIdentityBinding.select("g", Arrays.asList(b, a, c));
+        assertEquals("c", selected.id); assertEquals(S, selected.source); assertEquals("", selected.avatar);
+        c.fired = true; selected = NotificationIdentityBinding.select("g", Arrays.asList(c, a, b));
+        assertEquals("b", selected.id); assertEquals(T, selected.source);
+    }
 }

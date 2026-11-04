@@ -20,6 +20,7 @@ public class FrameTransactionTest {
         for (Reminder r : source.items) {
             Reminder n = new Reminder(); n.id = r.id; n.friend = r.friend; n.crop = r.crop;
             n.avatarRef = r.avatarRef;
+            n.plateRef = r.plateRef;
             n.sourceFrameRef = r.sourceFrameRef;
             n.matureAt = r.matureAt; n.triggerAt = r.triggerAt; n.fired = r.fired; target.items.add(n);
         }
@@ -213,5 +214,33 @@ public class FrameTransactionTest {
         assertTrue(shared.disk.items.isEmpty()); shared.failWrite = false;
         FrameTransaction.Result result = FrameTransaction.commit(adapter, id, "s", 1, 1, 1, 1000, Collections.singletonList(10000L), 10, "");
         assertTrue(result.replay); assertEquals(id, result.reminder.sourceFrameRef); assertEquals(id, shared.disk.items.get(0).sourceFrameRef);
+    }
+    @Test public void plateOnlyNewAndRetainedOnDuplicateReplayAndFired() throws Exception {
+        Shared shared = new Shared(); Adapter adapter = new Adapter(shared);
+        String a = "a".repeat(64), b = "b".repeat(64), id = "12345678-1234-1234-1234-123456789abc";
+        FrameTransaction.Result first = FrameTransaction.commit(adapter, id, "s", 1, 1, 1, 1000,
+                Collections.singletonList(10000L), 10, "", a);
+        assertTrue(first.added); assertEquals(a, first.reminder.plateRef); assertEquals(id, first.reminder.sourceFrameRef);
+        FrameTransaction.Result duplicate = FrameTransaction.commit(adapter, "other", "s", 1, 2, 2, 1000,
+                Collections.singletonList(10000L), 10, "", b);
+        assertFalse(duplicate.added); assertEquals(a, duplicate.reminder.plateRef); assertEquals(id, duplicate.reminder.sourceFrameRef);
+        FrameTransaction.Result replay = FrameTransaction.commit(adapter, id, "s", 1, 3, 3, 1000,
+                Collections.singletonList(90000L), 10, "", b);
+        assertTrue(replay.replay); assertEquals(a, replay.reminder.plateRef);
+        FrameTransaction.State saved = adapter.read(); saved.items.get(0).fired = true; assertTrue(adapter.write(saved));
+        reopen(shared); assertTrue(shared.memory.items.get(0).fired); assertEquals(a, shared.memory.items.get(0).plateRef);
+    }
+    @Test public void badPlateAndFailedWriteNeverBlockAssetFallbackOrChangeReceiptSemantics() {
+        Shared shared = new Shared(); Adapter adapter = new Adapter(shared);
+        FrameTransaction.Result valid = FrameTransaction.commit(adapter, "bad", "s", 1, 1, 1, 1000,
+                Collections.singletonList(0L), 10, "a".repeat(64), "../unsafe");
+        assertTrue(valid.added); assertEquals("", valid.reminder.plateRef); assertEquals("a".repeat(64), valid.reminder.avatarRef);
+        shared.failWrite = true;
+        FrameTransaction.Result failed = FrameTransaction.commit(adapter, "new", "s", 1, 2, 2, 1000,
+                Collections.singletonList(90000L), 10, "", "b".repeat(64));
+        assertFalse(failed.committed); shared.failWrite = false;
+        FrameTransaction.Result repaired = FrameTransaction.commit(adapter, "new", "s", 1, 2, 2, 1000,
+                Collections.singletonList(90000L), 10, "", "c".repeat(64));
+        assertTrue(repaired.replay); assertEquals("b".repeat(64), repaired.reminder.plateRef);
     }
 }

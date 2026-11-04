@@ -837,7 +837,7 @@ public class MainActivity extends Activity {
         }
         listTitle.setText(groups.title());
         clearButton.setVisibility(hasFired ? View.VISIBLE : View.GONE);
-        String next = ReminderListGroups.signature(items, now);
+        String next = ReminderListGroups.signature(items, now) + ReminderImagePresentation.signature(items);
         if (next.equals(listSignature)) return;
         listSignature = next;
         avatars.clearRows();
@@ -855,7 +855,7 @@ public class MainActivity extends Activity {
                 continue;
             }
             addText(row, group.due(now) ? "提醒时间已到 · 待提交" : "待提醒", 12, GREEN, true, 0);
-            renderAvatarTime(row, group.anchor(), ReminderListGroups.avatarRef(group),
+            renderAvatarTime(row, group.anchor(), ReminderListGroups.avatarRef(group), ReminderImagePresentation.plateRef(group.reminders),
                     ReminderListGroups.summary(group), "最早成熟");
             LinearLayout details = column();
             Button toggle = button(row, "", false, 10, () -> {});
@@ -895,7 +895,7 @@ public class MainActivity extends Activity {
     private void renderReminder(LinearLayout row, Reminder r, SimpleDateFormat date, long now) {
         addText(row, r.fired ? "已提交提醒" : r.triggerAt <= now ? "提醒时间已到 · 待提交" : "待提醒", 12,
                 r.fired ? MUTED : GREEN, true, 0);
-        renderAvatarTime(row, r, r.avatarRef, "好友", "成熟");
+        renderAvatarTime(row, r, r.avatarRef, r.plateRef, "好友", "成熟");
         addText(row, ReminderListGroups.lead(r) + " · " + date.format(new Date(r.triggerAt)), 12, MUTED, false, 5);
         button(row, "删除这条提醒", false, 10, () -> new AlertDialog.Builder(this)
                 .setTitle("删除这条提醒？").setMessage("成熟时间：" + date.format(new Date(r.matureAt))
@@ -905,7 +905,16 @@ public class MainActivity extends Activity {
                 }).show());
     }
 
-    private void renderAvatarTime(LinearLayout row, Reminder reminder, String avatarRef, String label, String timeLabel) {
+    private void renderAvatarTime(LinearLayout row, Reminder reminder, String avatarRef, String plateRef, String label, String timeLabel) {
+        ImageView plate = null;
+        if (!NameplateRefPolicy.normalize(plateRef).isEmpty()) {
+            plate = new ImageView(this);
+            plate.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            plate.setPadding(dp(4), dp(4), dp(4), dp(4));
+            plate.setBackground(background(0xFFF0F3EB, 12, 0xFFE0E6DA));
+            plate.setClipToOutline(false);
+            row.addView(plate, spaced(-1, dp(122), 10));
+        }
         LinearLayout heading = new LinearLayout(this);
         heading.setGravity(android.view.Gravity.CENTER_VERTICAL);
         row.addView(heading, spaced(-1, -2, 10));
@@ -915,15 +924,23 @@ public class MainActivity extends Activity {
         image.setBackground(background(0xFFF0F3EB, 12, 0xFFE0E6DA));
         image.setClipToOutline(true);
         heading.addView(image, new LinearLayout.LayoutParams(dp(60), dp(60)));
+        image.setVisibility(plate == null ? View.VISIBLE : View.GONE);
         LinearLayout words = column();
         LinearLayout.LayoutParams textLayout = new LinearLayout.LayoutParams(0, -2, 1);
-        textLayout.leftMargin = dp(13); heading.addView(words, textLayout);
+        textLayout.leftMargin = plate == null ? dp(13) : 0; heading.addView(words, textLayout);
         addText(words, label, 12, MUTED, false, 0);
         addText(words, timeLabel + " " + new SimpleDateFormat("HH:mm:ss", Locale.CHINA)
                 .format(new Date(reminder.matureAt)), 20, INK, true, 3);
         addText(words, new SimpleDateFormat("yyyy年M月d日", Locale.CHINA)
                 .format(new Date(reminder.matureAt)), 12, MUTED, false, 3);
         avatars.bind(image, avatarRef);
+        if (plate != null) {
+            ImageView full = plate;
+            avatars.bindPlate(full, plateRef, () -> image.setVisibility(View.GONE), () -> {
+                full.setVisibility(View.GONE); image.setVisibility(View.VISIBLE);
+                textLayout.leftMargin = dp(13); words.setLayoutParams(textLayout);
+            });
+        }
     }
 
     private String monitorStatusText(String status) {

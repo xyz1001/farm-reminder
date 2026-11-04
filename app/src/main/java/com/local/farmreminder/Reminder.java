@@ -3,6 +3,7 @@ package com.local.farmreminder;
 public class Reminder {
     public String id, friend, crop;
     public String avatarRef = "";
+    public String plateRef = "";
     public String sourceFrameRef = "";
     public long matureAt, triggerAt;
     public boolean fired;

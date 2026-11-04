@@ -52,6 +52,10 @@ final class FrameTransaction {
     }
     static Result commit(Adapter adapter, String id, String session, int window, long sequence, long uptime,
                          long wall, List<Long> countdowns, int leadSeconds, String avatarRef) {
+        return commit(adapter, id, session, window, sequence, uptime, wall, countdowns, leadSeconds, avatarRef, "");
+    }
+    static Result commit(Adapter adapter, String id, String session, int window, long sequence, long uptime,
+                         long wall, List<Long> countdowns, int leadSeconds, String avatarRef, String plateRef) {
         try {
             if (!adapter.repair() || id == null || id.isEmpty()) return failed();
             State state = adapter.read();
@@ -71,6 +75,7 @@ final class FrameTransaction {
                 if (reminder == null) {
                     reminder = new Reminder(); reminder.id = UUID.randomUUID().toString(); reminder.friend = "好友"; reminder.crop = "";
                     reminder.avatarRef = AvatarRefPolicy.normalize(avatarRef);
+                    reminder.plateRef = NameplateRefPolicy.normalize(plateRef);
                     reminder.sourceFrameRef = SourceFrameRefPolicy.normalize(id);
                     reminder.matureAt = maturity; reminder.triggerAt = maturity - Math.max(0, leadSeconds) * 1000L;
                     state.items.add(reminder); identity.addAnchor(reminder); added = true;

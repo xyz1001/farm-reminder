@@ -30,6 +30,7 @@ public class ReminderStore {
             JSONObject o = a.getJSONObject(i); Reminder r = new Reminder();
             r.id = o.getString("id"); r.friend = o.optString("friend", ""); r.crop = o.optString("crop", "");
             r.avatarRef = AvatarRefPolicy.normalize(o.optString("avatarRef", ""));
+            r.plateRef = NameplateRefPolicy.normalize(o.optString("plateRef", ""));
             r.sourceFrameRef = SourceFrameRefPolicy.normalize(o.optString("sourceFrameRef", ""));
             r.matureAt = o.getLong("matureAt"); r.triggerAt = o.getLong("triggerAt"); r.fired = o.optBoolean("fired"); result.add(r);
         }
@@ -40,7 +41,8 @@ public class ReminderStore {
         for (Reminder r : items) {
             JSONObject o = new JSONObject(); o.put("id", r.id); o.put("friend", r.friend); o.put("crop", r.crop);
             o.put("matureAt", r.matureAt); o.put("triggerAt", r.triggerAt); o.put("fired", r.fired); o.put("avatarRef", AvatarRefPolicy.normalize(r.avatarRef));
-            o.put("sourceFrameRef", SourceFrameRefPolicy.normalize(r.sourceFrameRef)); a.put(o);
+            o.put("sourceFrameRef", SourceFrameRefPolicy.normalize(r.sourceFrameRef));
+            o.put("plateRef", NameplateRefPolicy.normalize(r.plateRef)); a.put(o);
         }
         return a.toString();
     }
@@ -154,10 +156,13 @@ public class ReminderStore {
         return false;
     } }
     FrameOutcome commitFrame(DiskFrameStore.Frame frame, List<Long> countdownMs, int leadSeconds, String avatarRef) {
+        return commitFrame(frame, countdownMs, leadSeconds, avatarRef, "");
+    }
+    FrameOutcome commitFrame(DiskFrameStore.Frame frame, List<Long> countdownMs, int leadSeconds, String avatarRef, String plateRef) {
         synchronized (LOCK) {
             if (frame == null) return new FrameOutcome(false, false, false, false, java.util.Collections.emptyList(), "STORAGE_FAILED");
             FrameTransaction.Result r = FrameTransaction.commit(frameAdapter(), frame.id, frame.sessionId, frame.windowId,
-                    frame.captureSequence, frame.captureUptimeMs, frame.captureWallMs, countdownMs, leadSeconds, avatarRef);
+                    frame.captureSequence, frame.captureUptimeMs, frame.captureWallMs, countdownMs, leadSeconds, avatarRef, plateRef);
             if (r.committed && r.added) try { new AlarmScheduler(context).rescheduleAll(); } catch (RuntimeException ignored) { }
             return new FrameOutcome(r.committed, r.replay, r.confirmed, r.added, r.reminders, r.code);
         }
