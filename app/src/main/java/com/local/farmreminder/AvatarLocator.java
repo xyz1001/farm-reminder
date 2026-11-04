@@ -14,7 +14,16 @@ final class AvatarLocator {
     private AvatarLocator() { }
 
     static Bounds locate(int[] argb, int width, int height, List<OcrLine> lines) {
-        if (argb == null || lines == null || width < 160 || height < width
+        return locateInternal(argb, width, height, lines, true);
+    }
+
+    /** Visual crop seed only; never establishes friend identity or a trusted scene. */
+    static Bounds locateVisual(int[] argb, int width, int height) {
+        return locateInternal(argb, width, height, null, false);
+    }
+
+    private static Bounds locateInternal(int[] argb, int width, int height, List<OcrLine> lines, boolean needScene) {
+        if (argb == null || (needScene && lines == null) || width < 160 || height < width
                 || (long) width * height > argb.length) return null;
         // Side bars are currently ambiguous: do not reinterpret their coordinates.
         if (blackColumn(argb, width, height, 0) || blackColumn(argb, width, height, width - 1)) return null;
@@ -24,20 +33,22 @@ final class AvatarLocator {
         while (bottom > top && height - bottom < height / 5 && blackRow(argb, width, bottom - 1)) bottom--;
         int vh = bottom - top;
         if (vh < width || vh > width * 3L) return null;
-        boolean home = false;
-        for (OcrLine l : lines) {
-            if (l != null && l.left >= 0 && l.top >= 0 && l.right > l.left && l.bottom > l.top
-                    && l.right <= width && l.bottom <= height
-                    && "回家".equals(l.text.trim()) && l.left >= width * .75
-                    && l.top >= top + vh * .70 && l.bottom <= top + vh * .90
-                    && l.right - l.left <= width * .16 && l.bottom - l.top <= width * .10) home = true;
+        if (needScene) {
+            boolean home = false;
+            for (OcrLine l : lines) {
+                if (l != null && l.left >= 0 && l.top >= 0 && l.right > l.left && l.bottom > l.top
+                        && l.right <= width && l.bottom <= height
+                        && "回家".equals(l.text.trim()) && l.left >= width * .75
+                        && l.top >= top + vh * .70 && l.bottom <= top + vh * .90
+                        && l.right - l.left <= width * .16 && l.bottom - l.top <= width * .10) home = true;
+            }
+            if (!home) return null;
+            // The friend selector strip and bright sky are independent, non-name scene anchors.
+            if (warmFraction(argb, width, height, width / 20, top + (int) (vh * .865),
+                    width * 19 / 20, top + (int) (vh * .94), 8) < .35
+                    || brightness(argb, width, width / 3, top + width / 30, width * 2 / 3,
+                    top + width / 12, 8) < 105) return null;
         }
-        if (!home) return null;
-        // The friend selector strip and bright sky are independent, non-name scene anchors.
-        if (warmFraction(argb, width, height, width / 20, top + (int) (vh * .865),
-                width * 19 / 20, top + (int) (vh * .94), 8) < .35
-                || brightness(argb, width, width / 3, top + width / 30, width * 2 / 3,
-                top + width / 12, 8) < 105) return null;
 
         // Normalize the search once; width-based geometry keeps circles circular.
         int sw = 310, sh = Math.max(1, (int) ((long) vh * sw / width));

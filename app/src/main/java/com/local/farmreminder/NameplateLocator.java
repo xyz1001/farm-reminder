@@ -3,7 +3,7 @@ package com.local.farmreminder;
 import java.util.List;
 import java.util.ArrayList;
 
-/** Optional full wooden plate, independently located after the unchanged portrait/scene gate. */
+/** Optional full wooden plate; visual evidence is not friend-scene or identity evidence. */
 final class NameplateLocator {
     static final class Bounds {
         final int left, top, right, bottom;
@@ -13,12 +13,12 @@ final class NameplateLocator {
     }
 
     static Bounds locate(int[] pixels, int width, int height, List<OcrLine> lines) {
-        AvatarLocator.Bounds portrait = AvatarLocator.locate(pixels, width, height, lines);
+        AvatarLocator.Bounds portrait = AvatarLocator.locateVisual(pixels, width, height);
         if (portrait == null) return null;
         return locatePlate(pixels, width, height, portrait);
     }
 
-    /** Edge-confirmation stage; the public entry above supplies the unchanged friend/portrait admission. */
+    /** Edge-confirmation stage; the entry above supplies only a visual portrait candidate. */
     static Bounds locatePlate(int[] pixels, int width, int height, AvatarLocator.Bounds portrait) {
         Bounds previous = legacyPlate(pixels, width, height, portrait);
         return previous != null ? previous : connectedPlate(pixels, width, height, portrait);

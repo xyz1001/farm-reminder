@@ -63,8 +63,12 @@ public class NameplateLocatorTest {
         assertTrue(b.left<=35 && b.top<=157 && b.right>454 && b.bottom>328);
     }
 
-    @Test public void ownOrNonFarmAndMissingExperienceFailSoft() {
-        int[] p=scene(0,0,0); assertNull(NameplateLocator.locate(p,W,H,Collections.emptyList()));
+    @Test public void completeVisualPlateDoesNotRequireSceneButMissingExperienceFailsSoft() {
+        int[] p=scene(0,0,0); assertNull(AvatarLocator.locate(p,W,H,Collections.emptyList()));
+        assertNotNull(NameplateLocator.locate(p,W,H,Collections.emptyList()));
+        assertNotNull(NameplateLocator.locate(p,W,H,null));
+        assertSame(NotificationIdentityLabel.EMPTY, NotificationIdentityParser.parse(Collections.emptyList(), Collections.emptyList(),
+                AvatarLocator.locateVisual(p,W,H), W, H, false, false));
         rect(p,W,235,237,420,280,WOOD);
         assertNull(NameplateLocator.locatePlate(p,W,H,FRAME));
     }
@@ -76,6 +80,7 @@ public class NameplateLocatorTest {
         assertNull(NameplateLocator.locatePlate(bottom,W,H,FRAME));
         int[] occluded=scene(0,0,0); rect(occluded,W,200,160,445,300,0xff222222);
         assertNull(NameplateLocator.locatePlate(occluded,W,H,FRAME));
+        assertNull(NameplateLocator.locate(occluded,W,H,Collections.emptyList()));
     }
 
     @Test public void competingPanelEdgesAndOccupiedPaddingAreRejected() {
@@ -88,12 +93,14 @@ public class NameplateLocatorTest {
     @Test public void invalidInputNeverProducesPartialBounds() {
         assertNull(NameplateLocator.locate(null,W,H,home(0)));
         assertNull(NameplateLocator.locate(new int[1],Integer.MAX_VALUE,Integer.MAX_VALUE,home(0)));
+        assertNull(NameplateLocator.locate(new int[W*H],W,H,Collections.emptyList()));
     }
 
     @Test public void sourceTruncationIsRejectedRatherThanClampedToAnIncompletePlate() {
         int[] p=scene(0,0,0), narrow=new int[430*H];
         for(int y=0;y<H;y++) System.arraycopy(p,y*W,narrow,y*430,430);
         assertNull(NameplateLocator.locatePlate(narrow,430,H,FRAME));
+        assertNull(NameplateLocator.locate(narrow,430,H,Collections.emptyList()));
         assertNull(NameplateLocator.locatePlate(Arrays.copyOf(p,W*320),W,320,FRAME));
     }
 
@@ -134,8 +141,8 @@ public class NameplateLocatorTest {
         }
     }
 
-    @Test public void lowGreenStillRequiresSceneAndActualFieldStructure() {
-        assertNull(NameplateLocator.locate(lowGreenScene(0,0,0),W,H,Collections.emptyList()));
+    @Test public void lowGreenRequiresActualFieldStructureButNotRemoteScene() {
+        assertNotNull(NameplateLocator.locate(lowGreenScene(0,0,0),W,H,Collections.emptyList()));
         int[] p=scene(0,0,0);rect(p,W,200,232,442,290,WOOD);
         assertNull(NameplateLocator.locate(p,W,H,home(0))); // Plain wood cannot stand in for an experience field.
     }

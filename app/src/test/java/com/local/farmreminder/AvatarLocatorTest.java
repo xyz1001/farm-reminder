@@ -52,6 +52,19 @@ public class AvatarLocatorTest {
         assertNull(AvatarLocator.locate(scene(1, 0, true, true), W, H,
                 Arrays.asList(new OcrLine("好友回家", 265, 550, 290, 560))));
     }
+    @Test public void visualSeedAllowsMissingRemoteContextButKeepsGeometryChecks() {
+        int[] frame = scene(1, 0, true, true);
+        rect(frame, W, 0, 601, W, 652, SKY); // No warm remote strip.
+        assertNull(AvatarLocator.locate(frame, W, H, Collections.emptyList()));
+        assertNull(AvatarLocator.locate(frame, W, H, home(1, 0)));
+        assertNull(AvatarLocator.locate(frame, W, H, null));
+        assertNotNull(AvatarLocator.locateVisual(frame, W, H));
+        assertNull(AvatarLocator.locateVisual(scene(1, 0, false, true), W, H));
+        assertNull(AvatarLocator.locateVisual(scene(1, 0, true, false), W, H));
+        int[] sideBar = scene(1, 0, true, true); rect(sideBar, W, 0, 0, 2, H, 0xff000000);
+        assertNull(AvatarLocator.locateVisual(sideBar, W, H));
+        assertNull(AvatarLocator.locateVisual(null, W, H));
+    }
     @Test public void actualReturnHomeGeometryIgnoresUnrelatedInvalidBoxes() {
         int[] frame = Arrays.copyOf(scene(4, 0, true, true), 1240 * 2772);
         List<OcrLine> lines = Arrays.asList(null, new OcrLine("", -1, 0, 10, 10),
@@ -68,6 +81,7 @@ public class AvatarLocatorTest {
         circle(ambiguous, W, 20, 42, 13, 1, true, true);
         circle(ambiguous, W, 47, 80, 13, 1, true, true);
         assertNull(AvatarLocator.locate(ambiguous, W, H, home(1, 0)));
+        assertNull(AvatarLocator.locateVisual(ambiguous, W, H));
     }
     @Test public void truncatedFrameIsNotAnAvatar() {
         int[] frame = scene(1, 0, true, true);
