@@ -38,6 +38,8 @@ public class FarmAccessibilityService extends AccessibilityService {
     private static volatile DurableFrameEngine engine;
     private static final FramePipeline<Bitmap> capture = new FramePipeline<>(Bitmap::recycle);
     private static long captureAttempt;
+    private static long captureRevision;
+    private static MonitorForegroundService captureOwner;
     private static final AtomicLong NEXT_INSTANCE = new AtomicLong();
     private static final String CAPTURE_BLOCKED = "截图任务未结束，暂不可启动；等待完成或重启本提醒应用进程";
     private final long instanceSequence = NEXT_INSTANCE.incrementAndGet();
@@ -55,6 +57,8 @@ public class FarmAccessibilityService extends AccessibilityService {
     private boolean usagePermission, screenInteractive, screenLocked = true, userUnlocked;
     private String captureSession = UUID.randomUUID().toString(), reason = "等待启动";
     private long captureSequence, runEpoch, nextCaptureAllowed, screenshots, errors;
+    private long monitorRevision;
+    private MonitorForegroundService monitorOwner;
     private long sceneEnters, sceneExits, recognizedEvents, added, saveFailures, frameFailures;
     private volatile String dumpSnapshot = "snapshot not yet available";
     private final LiveDiagnostics liveDiagnostics = new LiveDiagnostics();
@@ -109,7 +113,9 @@ public class FarmAccessibilityService extends AccessibilityService {
             if (!alive() || !isRunning || engine == null) return;
             // Both engine fatal paths stop exactly the run that registered this listener.
             if (engine.isRunning() || engine.epoch() != runEpoch + 1) return;
+            long revision = monitorRevision; MonitorForegroundService owner = monitorOwner;
             stopSession(false); reason = status; lastStatus = status; publish();
+            if (owner != null) owner.onMonitorFailure(revision, MonitorCoordinator.Reason.ENGINE_FATAL);
         }
         @Override public void onFrameFailure(String anonymousCode, long epoch) {
             if (!alive() || !isRunning || engine == null || epoch != runEpoch || epoch != engine.epoch()) return;
@@ -197,14 +203,33 @@ public class FarmAccessibilityService extends AccessibilityService {
             lastStatus = enabled ? "服务未连接或系统版本不支持截图" : "已停止";
             return;
         }
-        if (Looper.myLooper() == Looper.getMainLooper()) service.setRunning(enabled);
-        else service.handler.post(() -> service.setRunning(enabled));
+        // Starts require an explicit current owner/revision, including at execution time.
+        if (enabled) return;
+        long expected = service.monitorRevision;
+        MonitorForegroundService expectedOwner = service.monitorOwner;
+        if (Looper.myLooper() == Looper.getMainLooper()) service.setRunning(false);
+        else service.handler.post(() -> { if (service.alive() && service.monitorRevision == expected && service.monitorOwner == expectedOwner) service.setRunning(false); });
+    }
+    static MonitorCoordinator.Reason startOwned(MonitorForegroundService owner, long revision) {
+        FarmAccessibilityService service = instance;
+        if (service == null || !isConnected || !MonitorCoordinator.currentOwner(owner, owner, revision)) return MonitorCoordinator.Reason.ACCESSIBILITY;
+        if (isRunning) return service.monitorOwner == owner && service.monitorRevision == revision ? MonitorCoordinator.Reason.NONE : MonitorCoordinator.Reason.BUSY;
+        if (!MonitorRuntimePolicy.captureAvailable(capture.captureBusy())) return MonitorCoordinator.Reason.BUSY;
+        service.monitorOwner = owner; service.monitorRevision = revision;
+        service.setRunning(true);
+        return isRunning ? MonitorCoordinator.Reason.NONE : MonitorCoordinator.Reason.BUSY;
+    }
+    static MonitorCoordinator.Reason capturePauseReason() {
+        FarmAccessibilityService service = instance;
+        if (service == null || !service.alive()) return MonitorCoordinator.Reason.ACCESSIBILITY;
+        if (!service.userUnlocked || !service.screenInteractive || service.screenLocked) return MonitorCoordinator.Reason.LOCKED;
+        return service.foreground ? MonitorCoordinator.Reason.NONE : MonitorCoordinator.Reason.NOT_TARGET;
     }
     @Override protected void onServiceConnected() {
         super.onServiceConnected();
         if (destroyed) return;
         FarmAccessibilityService previous = instance;
-        if (previous != null) previous.retire();
+        if (previous != null) { MonitorForegroundService.accessibilityChanged(false); previous.retire(); }
         instance = this; isConnected = true; isRunning = false;
         lifecycle(LifecycleHistory.Event.ACCESS_CONNECT, LifecycleHistory.Reason.NONE);
         entryDebug = (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
@@ -226,6 +251,7 @@ public class FarmAccessibilityService extends AccessibilityService {
         if (capture.captureBusy()) armWatchdog(capture.captureId(), capture.captureStarted());
         lastStatus = capture.captureBusy() ? CAPTURE_BLOCKED : "服务已连接，请手动启动监测";
         reason = lastStatus; publish();
+        MonitorForegroundService.accessibilityChanged(true);
     }
     private void setRunning(boolean start) {
         if (!alive()) return;
@@ -263,10 +289,18 @@ public class FarmAccessibilityService extends AccessibilityService {
         if (receiverRegistered) { try { unregisterReceiver(screenReceiver); } catch (IllegalArgumentException ignored) { } receiverRegistered = false; }
     }
     @Override public void onAccessibilityEvent(AccessibilityEvent event) { }
-    @Override public void onInterrupt() { if (alive()) { lifecycle(LifecycleHistory.Event.ACCESS_INTERRUPT, LifecycleHistory.Reason.INTERRUPT); stopSession(true); lastStatus = "服务中断，请重新启动"; } }
+    @Override public void onInterrupt() {
+        if (!alive()) return;
+        lifecycle(LifecycleHistory.Event.ACCESS_INTERRUPT, LifecycleHistory.Reason.INTERRUPT);
+        if (!MonitorRuntimePolicy.interruptRequiresSuspension(isRunning)) return;
+        long revision = monitorRevision; MonitorForegroundService owner = monitorOwner;
+        stopSession(true);
+        reason = "服务中断，请手动重试监测"; lastStatus = reason; publish();
+        if (owner != null) owner.onMonitorFailure(revision, MonitorCoordinator.Reason.UNEXPECTED_STOP);
+    }
     @Override public boolean onUnbind(Intent intent) {
         if (alive()) lifecycle(LifecycleHistory.Event.ACCESS_UNBIND, LifecycleHistory.Reason.UNBIND);
-        if (alive()) { stopSession(true); detachListener(); isConnected = false; instance = null; lastStatus = "服务断开，请重新启动监测"; }
+        if (alive()) { stopSession(true); detachListener(); isConnected = false; instance = null; lastStatus = "服务断开，请重新启动监测"; MonitorForegroundService.accessibilityChanged(false); }
         return super.onUnbind(intent);
     }
     private void newCaptureSession() { captureSession = UUID.randomUUID().toString(); captureSequence = 0; acceptedSequences.clear(); }
@@ -314,7 +348,10 @@ public class FarmAccessibilityService extends AccessibilityService {
         if (!alive()) return false;
         if (isRunning && shizukuMode != ShizukuTaskGate.isEnabled(this)) {
             lifecycle(LifecycleHistory.Event.ACCESS_STOP, LifecycleHistory.Reason.SOURCE_CHANGED);
-            stopSession(true); reason = "前台来源已更改，监测已停止，请重新启动"; lastStatus = reason; publish(); return false;
+            long revision = monitorRevision; MonitorForegroundService owner = monitorOwner;
+            stopSession(true); reason = "前台来源已更改，监测已停止，请重新启动"; lastStatus = reason; publish();
+            if (owner != null) owner.onMonitorFailure(revision, MonitorCoordinator.Reason.SOURCE_CHANGED);
+            return false;
         }
         UsageForegroundPolicy.Candidate candidate = null;
         String key = null, className = null;
@@ -400,6 +437,7 @@ public class FarmAccessibilityService extends AccessibilityService {
         long request = capture.beginCapture(uptime);
         if (request == 0) return;
         captureAttempt = LifecycleDiagnostics.current(this);
+        captureRevision = monitorRevision; captureOwner = monitorOwner;
         String session = captureSession; long sequence = ++captureSequence;
         long epoch = runEpoch;
         if (!containerPolicy.begin(session, epoch, sequence)) { capture.endCapture(request); schedule(); return; }
@@ -484,11 +522,13 @@ public class FarmAccessibilityService extends AccessibilityService {
     }
     private void armWatchdog(long request, long started) {
         long attempt = captureAttempt;
+        long revision = captureRevision; MonitorForegroundService owner = captureOwner;
         handler.postDelayed(() -> {
             if (!alive() || !capture.timeoutCapture(request, SystemClock.uptimeMillis())) return;
             LifecycleDiagnostics.event(this, attempt, LifecycleHistory.Event.CAPTURE_WATCHDOG, LifecycleHistory.Reason.WATCHDOG, null);
-            if (isRunning) stopSession(true);
+            if (isRunning && monitorRevision == revision && monitorOwner == owner) stopSession(true);
             reason = CAPTURE_BLOCKED; lastStatus = reason; publish();
+            if (owner != null) owner.onMonitorFailure(revision, MonitorCoordinator.Reason.WATCHDOG);
         }, Math.max(0, FramePipeline.REQUEST_TIMEOUT_MS - (SystemClock.uptimeMillis() - started)));
     }
     private void leaveScene() {
@@ -528,6 +568,10 @@ public class FarmAccessibilityService extends AccessibilityService {
             writer.println("runtime running=" + isRunning + " connected=" + isConnected
                     + " captureInFlight=" + capture.captureBusy() + " captureTimeout=" + capture.captureTimedOut()
                     + " foregroundServiceErrorPresent=" + !MonitorForegroundService.lastError.isEmpty());
+            MonitorCoordinator.Snapshot restore = MonitorCoordinator.getSnapshot(this);
+            writer.println("restore revision=" + restore.revision + " enrolled=" + restore.enrolled + " wanted=" + restore.wanted
+                    + " state=" + restore.state + " reason=" + restore.reason + " fgs=" + restore.foregroundActive + " running=" + restore.monitoringRunning
+                    + " " + MonitorCoordinator.diagnostics());
             writer.println(entryFeedback.snapshot(SystemClock.elapsedRealtime()));
             writer.println("lifecycle generation|attempt|elapsedMs|wallMs|event|reason|bits|exceptionClass; bits: ENGINE_REJECT=running,frameActive,nativeActive,transaction; other events=connected,running,fgs,reserved\n" + LifecycleDiagnostics.snapshot(this));
             writer.println("cachedPublished " + dumpSnapshot);
@@ -537,7 +581,7 @@ public class FarmAccessibilityService extends AccessibilityService {
     }
     @Override public void onDestroy() {
         if (alive()) lifecycle(LifecycleHistory.Event.ACCESS_DESTROY, LifecycleHistory.Reason.DESTROY);
-        if (alive()) { stopSession(true); detachListener(); isConnected = false; instance = null; lastStatus = "服务断开，请重新启动监测"; }
+        if (alive()) { stopSession(true); detachListener(); isConnected = false; instance = null; lastStatus = "服务断开，请重新启动监测"; MonitorForegroundService.accessibilityChanged(false); }
         destroyed = true; handler.removeCallbacks(sample);
         if (receiverRegistered) { try { unregisterReceiver(screenReceiver); } catch (IllegalArgumentException ignored) { } receiverRegistered = false; }
         super.onDestroy();

@@ -16,7 +16,6 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.os.SystemClock;
 import android.provider.Settings;
 import android.view.View;
 import android.view.WindowInsets;
@@ -64,10 +63,8 @@ public class MainActivity extends Activity {
     private AlarmScheduler scheduler;
     private int leadSeconds;
     private boolean resumed;
-    private boolean foregroundStartupPending, foregroundRequestFailed;
+    private boolean observingUserStart;
     private long lifecycleAttempt;
-    private long foregroundStartupDeadline;
-    private String foregroundErrorBeforeStart = "";
     private String listSignature = "";
     private String feedbackMessage = "";
     private final Set<String> expandedGroups = new HashSet<>();
@@ -76,6 +73,9 @@ public class MainActivity extends Activity {
     private TextView homeMode, setupProgress, setupTitle, setupDetail;
     private LinearLayout setupModes;
     private Button setupAction, notificationContinue, setupBack;
+    private LinearLayout setupMonitorPanel;
+    private TextView setupMonitorStatus;
+    private Button setupMonitorRetry, setupMonitorStop;
     private boolean setupVisible, reviewMode, screenBuilt;
     private String currentPage = "home";
     private SetupFlowPolicy.Step displayedStep;
@@ -106,10 +106,8 @@ public class MainActivity extends Activity {
             historyExpanded = state.getBoolean("historyExpanded", false);
             ArrayList<String> expanded = state.getStringArrayList("expandedGroups");
             if (expanded != null) expandedGroups.addAll(expanded);
-            foregroundStartupPending = state.getBoolean("foregroundStartupPending", false);
             lifecycleAttempt = state.getLong("lifecycleGeneration", 0) == LifecycleDiagnostics.generation(this) ? state.getLong("lifecycleAttempt", 0) : 0;
-            foregroundStartupDeadline = state.getLong("foregroundStartupDeadline", 0);
-            foregroundErrorBeforeStart = state.getString("foregroundErrorBeforeStart", "");
+            observingUserStart = lifecycleAttempt != 0 && state.getBoolean("observingUserStart", false);
             currentPage = state.getString("currentPage", "home");
             setupVisible = state.getBoolean("setupVisible", false);
             reviewMode = state.getBoolean("reviewMode", false);
@@ -170,14 +168,9 @@ public class MainActivity extends Activity {
         addText(capture, "监测", 12, GREEN, true, 0);
         runningLabel = addText(capture, "准备就绪", 26, INK, true, 12);
         captureStatus = addText(capture, "", 14, MUTED, false, 8);
+        addText(capture, MonitorPresentation.RESTORE_HINT, 12, MUTED, false, 10);
         startButton = button(capture, "开始监测", true, 22, this::requestMonitoring);
-        stopButton = button(capture, "停止监测", true, 22, () -> {
-            try {
-                MonitorForegroundService.requestStop(this); foregroundStartupPending = false;
-                showFeedback("已停止，截图与提醒保留");
-            } catch (RuntimeException e) { showFeedback("停止失败，请重试"); }
-            refresh();
-        });
+        stopButton = button(capture, "停止监测", true, 22, this::requestStopMonitoring);
         LinearLayout counts = new LinearLayout(this);
         homePage.addView(counts, spaced(-1, -2, 20));
         LinearLayout completed = column(), pending = column();
@@ -197,8 +190,8 @@ public class MainActivity extends Activity {
         retryButton = button(progress, "重试保存/失败图片", false, 10, () -> {
             try {
                 FarmAccessibilityService.retryFailedFrames(this);
-                showFeedback(FarmAccessibilityService.isRunning
-                        ? "已请求重试" : "已请求重试，手动开始监测后继续识别");
+                showFeedback(MonitorCoordinator.getSnapshot(this).monitoringRunning
+                        ? "已请求重试" : "已请求重试，请查看监测状态；队列仍保留");
             } catch (RuntimeException e) { showFeedback("未能重试，失败图片仍保留"); }
         });
         retryButton.setVisibility(View.GONE);
@@ -229,6 +222,7 @@ public class MainActivity extends Activity {
         addText(settingsPage, "设置", 28, INK, true, 0);
         LinearLayout permissions = card(settingsPage, 22, Color.WHITE);
         addText(permissions, "模式与权限", 19, INK, true, 0);
+        addText(permissions, MonitorPresentation.RESTORE_HINT, 12, MUTED, false, 8);
         button(permissions, "权限中心", false, 12, () -> {
             reviewMode = true; backStep = null; setupVisible = true; refresh();
         });
@@ -319,6 +313,10 @@ public class MainActivity extends Activity {
             reviewMode = false; backStep = null; setupVisible = false; currentPage = "home"; refresh();
         });
         setupBack = button(setupPage, "返回", false, 8, this::navigateBack);
+        setupMonitorPanel = card(setupPage, 24, Color.WHITE);
+        setupMonitorStatus = addText(setupMonitorPanel, "", 14, INK, false, 0);
+        setupMonitorRetry = button(setupMonitorPanel, "重试监测", false, 12, this::requestMonitoring);
+        setupMonitorStop = button(setupMonitorPanel, "停止监测", false, 8, this::requestStopMonitoring);
         LinearLayout notificationSettings = card(setupPage, 24, Color.WHITE);
         setupVibrationStatus = buildNotificationSettings(notificationSettings);
         setupVibrationHint = notificationSettingsHint(notificationSettings);
@@ -355,7 +353,10 @@ public class MainActivity extends Activity {
     private void requestMonitoring() {
         long clickAttempt = LifecycleDiagnostics.click(this);
         LifecycleDiagnostics.event(this, clickAttempt, LifecycleHistory.Event.UI_CLICK, LifecycleHistory.Reason.NONE, null);
-        if (foregroundStartupPending || MonitorForegroundService.isActive || FarmAccessibilityService.isRunning) {
+        MonitorCoordinator.Snapshot before = MonitorCoordinator.getSnapshot(this);
+        MonitorPresentation presentation = MonitorPresentation.from(before, Build.VERSION.SDK_INT >= 30,
+                SetupFlowPolicy.requiredReady(setupStep()));
+        if (!presentation.showStart) {
             LifecycleDiagnostics.event(this, clickAttempt, LifecycleHistory.Event.SETUP_REJECT, LifecycleHistory.Reason.ALREADY_ACTIVE, null); return;
         }
         if (setupStep() != SetupFlowPolicy.Step.READY) {
@@ -365,19 +366,24 @@ public class MainActivity extends Activity {
         lifecycleAttempt = clickAttempt;
         LifecycleDiagnostics.setCurrent(this, lifecycleAttempt);
         try {
-            foregroundErrorBeforeStart = MonitorForegroundService.lastError;
             LifecycleDiagnostics.event(this, lifecycleAttempt, LifecycleHistory.Event.START_REQUEST, LifecycleHistory.Reason.NONE, null);
-            MonitorForegroundService.requestStart(this, lifecycleAttempt);
-            foregroundStartupPending = true;
-            foregroundRequestFailed = false;
-            foregroundStartupDeadline = SystemClock.uptimeMillis() + 5000;
-            clearFeedback();
+            MonitorCoordinator.RequestResult result = MonitorForegroundService.requestStart(this, lifecycleAttempt);
+            observingUserStart = result.code == MonitorCoordinator.RequestCode.ACCEPTED;
+            showFeedback(MonitorPresentation.startFeedback(result.code, result.snapshot.reason));
         } catch (RuntimeException e) {
             LifecycleDiagnostics.event(this, lifecycleAttempt, LifecycleHistory.Event.START_REQUEST, LifecycleHistory.Reason.EXCEPTION, e);
-            foregroundStartupPending = false;
-            foregroundRequestFailed = true;
-            showFeedback("无法启动，请检查截图服务后重试");
+            observingUserStart = false;
+            showFeedback("启动请求未确认，请检查当前状态后重试");
         }
+        refresh();
+    }
+
+    private void requestStopMonitoring() {
+        observingUserStart = false;
+        try {
+            MonitorCoordinator.RequestResult result = MonitorForegroundService.requestStop(this);
+            showFeedback(MonitorPresentation.stopFeedback(result.code));
+        } catch (RuntimeException e) { showFeedback("停止请求未确认，请重试"); }
         refresh();
     }
 
@@ -461,7 +467,9 @@ public class MainActivity extends Activity {
                 setupAction.setText("返回首页"); break;
             default:
                 setupProgress.setText("已完成"); setupTitle.setText("准备就绪");
-                setupDetail.setText("返回首页后，手动开始监测"); setupAction.setText("返回首页");
+                setupDetail.setText(MonitorCoordinator.getSnapshot(this).wanted
+                        ? "所需设置已完成，返回首页查看监测状态" : "返回首页后，手动开始监测");
+                setupAction.setText("返回首页");
         }
     }
 
@@ -626,11 +634,9 @@ public class MainActivity extends Activity {
         state.putStringArrayList("expandedGroups", new ArrayList<>(expandedGroups));
         state.putBoolean("exportPicking", exportState.picking);
         state.putBoolean("exportBusy", exportState.busy);
-        state.putBoolean("foregroundStartupPending", foregroundStartupPending);
+        state.putBoolean("observingUserStart", observingUserStart);
         state.putLong("lifecycleGeneration", LifecycleDiagnostics.generation(this));
         state.putLong("lifecycleAttempt", lifecycleAttempt);
-        state.putLong("foregroundStartupDeadline", foregroundStartupDeadline);
-        state.putString("foregroundErrorBeforeStart", foregroundErrorBeforeStart);
         state.putString("currentPage", currentPage);
         state.putBoolean("setupVisible", setupVisible);
         state.putBoolean("reviewMode", reviewMode);
@@ -714,6 +720,7 @@ public class MainActivity extends Activity {
         super.onResume();
         FarmAccessibilityService.refreshDiskProgress(this);
         resumed = true;
+        MonitorCoordinator.onVisible(this);
         try { scheduler.rescheduleAll(); }
         catch (RuntimeException e) { showMessage("部分提醒未能重新安排，请检查权限。"); }
         handler.removeCallbacks(ticker);
@@ -739,63 +746,59 @@ public class MainActivity extends Activity {
         boolean supported = Build.VERSION.SDK_INT >= 30;
         boolean enabled = FarmAccessibilityService.isEnabled(this);
         boolean connected = FarmAccessibilityService.isConnected;
-        boolean running = FarmAccessibilityService.isRunning;
+        MonitorCoordinator.Snapshot monitor = MonitorCoordinator.getSnapshot(this);
+        boolean running = monitor.monitoringRunning;
         boolean useShizuku = ShizukuTaskGate.isEnabled(this);
         boolean usageAllowed = !useShizuku && UsageAccessGate.hasPermission(this);
         boolean sourceReady = useShizuku ? ShizukuTaskGate.get(this).hasPermission() : usageAllowed;
         modeDescription.setText(useShizuku
                 ? "按系统任务判断农场前台"
                 : "通过使用记录判断小程序，无法区分具体小游戏。");
-        boolean foregroundActive = MonitorForegroundService.isActive;
-        String serviceError = MonitorForegroundService.lastError;
-        boolean newServiceError = !blank(serviceError)
-                && !serviceError.equals(foregroundErrorBeforeStart);
-        if (foregroundStartupPending) {
-            if (foregroundActive) {
+        boolean foregroundActive = monitor.foregroundActive;
+        if (observingUserStart) {
+            if (monitor.state == MonitorCoordinator.State.RUNNING && running) {
                 LifecycleDiagnostics.event(this, lifecycleAttempt, LifecycleHistory.Event.PENDING_CONFIRMED, LifecycleHistory.Reason.NONE, null);
-                foregroundStartupPending = false;
-                clearFeedback();
-            } else if (newServiceError) {
+                observingUserStart = false;
+            } else if (monitor.state == MonitorCoordinator.State.SUSPENDED || monitor.state == MonitorCoordinator.State.ERROR
+                    || monitor.state == MonitorCoordinator.State.STOPPED && !monitor.wanted) {
                 LifecycleDiagnostics.event(this, lifecycleAttempt, LifecycleHistory.Event.PENDING_FAILED, LifecycleHistory.Reason.NOT_RUNNING, null);
-                foregroundStartupPending = false;
-                showFeedback("启动失败，请检查截图服务后重试");
-            } else if (SystemClock.uptimeMillis() >= foregroundStartupDeadline) {
-                LifecycleDiagnostics.event(this, lifecycleAttempt, LifecycleHistory.Event.PENDING_TIMEOUT, LifecycleHistory.Reason.NONE, null);
-                foregroundStartupPending = false;
-                showFeedback("启动尚未确认，请检查后重试");
+                observingUserStart = false;
             }
         }
         foregroundStatus.setText("前台监测服务 · " + (foregroundActive ? "运行中" : "未启动")
-                + (foregroundStartupPending ? " · 等待启动" : ""));
+                + "\n监测状态 · " + monitor.state.name() + " · " + monitor.reason.name());
+        boolean requiredReady = supported && sourceReady && enabled && connected;
+        MonitorPresentation presentation = MonitorPresentation.from(monitor, supported, requiredReady);
         updatingMode = true;
         modeChoices.check(useShizuku ? shizukuMode.getId() : usageMode.getId());
         updatingMode = false;
-        boolean modeEditable = canChangeMode();
+        boolean modeEditable = presentation.modeEditable;
         usageMode.setEnabled(modeEditable);
         shizukuMode.setEnabled(modeEditable);
         modeHint.setText(!modeEditable ? "请先停止监测，再切换模式" : useShizuku
                 ? "选择后不会自动开始监测"
                 : "应用使用情况权限 · " + (usageAllowed ? "已授权" : "未授权"));
-        boolean hasForegroundError = !foregroundActive && !foregroundStartupPending
-                && (foregroundRequestFailed || !blank(serviceError));
-        foregroundError.setVisibility(hasForegroundError ? View.VISIBLE : View.GONE);
-        foregroundError.setText("前台监测启动或运行遇到问题，请检查无障碍服务连接及系统设置后重试。");
+        foregroundError.setVisibility(presentation.needsAttention ? View.VISIBLE : View.GONE);
+        foregroundError.setText(presentation.detail);
         homeMode.setText(useShizuku ? "Shizuku" : "使用情况模式");
-        boolean requiredReady = supported && sourceReady && enabled && connected;
-        runningLabel.setText(!supported ? "设备暂不支持" : foregroundStartupPending ? "正在启动"
-                : !requiredReady ? "需要完成设置" : running ? "监测中" : foregroundActive ? "正在停止" : "准备就绪");
-        captureStatus.setText(!supported ? "截图需要 Android 11 及以上"
-                : !requiredReady ? "完成权限设置后，手动开始监测"
-                : running ? monitorStatusText(FarmAccessibilityService.lastStatus)
-                        + (notificationsAllowed() ? "" : "；通知未开启，提醒可能不可见")
-                : !notificationsAllowed() ? "通知未开启，提醒可能不可见；可返回此处停止"
-                : "手动开始后，进入好友农场查看成熟时间");
+        runningLabel.setText(presentation.title);
+        captureStatus.setText((monitor.state == MonitorCoordinator.State.RUNNING && running
+                ? monitorStatusText(FarmAccessibilityService.lastStatus) : presentation.detail)
+                + (notificationsAllowed() ? "" : "\n通知未开启，提醒可能不可见。"));
+        // The existing setup gate can hide the dashboard; retain a stop/retry affordance inside it too.
+        setupMonitorPanel.setVisibility(presentation.showStop ? View.VISIBLE : View.GONE);
+        setupMonitorStatus.setText(presentation.title + "\n" + presentation.detail);
+        setupMonitorRetry.setVisibility(presentation.showStart ? View.VISIBLE : View.GONE);
+        setupMonitorRetry.setText(presentation.startLabel);
+        setupMonitorRetry.setEnabled(presentation.startEnabled);
+        setupMonitorStop.setVisibility(presentation.showStop ? View.VISIBLE : View.GONE);
         OcrProgress progress = FarmAccessibilityService.getOcrProgress();
         renderExportState();
         processedCount.setText("已识别 " + progress.processed + " 张");
         pendingCount.setText("待处理 " + progress.queued + " 张");
         ocrState.setText((progress.recognizing ? "正在识别 1 张 · 不计入待识别"
-                : !running ? "监测未启动 · 已保存队列保留，需手动开始"
+                : !running ? (monitor.wanted ? "监测尚未运行 · 已保存队列保留，请查看监测状态"
+                        : "监测未启动 · 已保存队列保留，需手动开始")
                 : "暂无正在识别的图片") + "\n" + capturePauseText(progress, running, connected));
         queueDetails.setText(String.format(Locale.CHINA,
                 "成功归档（已留存）%d 张 · 失败保留 %d 张\n历史缺图/旧清理记录 %d 项 · 占用 %.1f MiB（含截图、OCR 和元数据）%s",
@@ -813,12 +816,11 @@ public class MainActivity extends Activity {
         diagnosticsText.setText("监测状态：" + FarmAccessibilityService.lastStatus
                 + (useShizuku ? "\nShizuku：" + ShizukuTaskGate.get(this).status() : "")
                 + "\n" + (blank(diagnostics) ? "暂无诊断数据" : diagnostics));
-        boolean active = running || foregroundActive || foregroundStartupPending;
-        startButton.setVisibility(active ? View.GONE : View.VISIBLE);
-        startButton.setEnabled(supported && !active);
+        startButton.setVisibility(presentation.showStart ? View.VISIBLE : View.GONE);
+        startButton.setEnabled(presentation.startEnabled);
         startButton.setAlpha(startButton.isEnabled() ? 1f : 0.55f);
-        startButton.setText(!supported ? "设备不支持" : !requiredReady ? "完成设置" : "开始监测");
-        stopButton.setVisibility(active ? View.VISIBLE : View.GONE);
+        startButton.setText(presentation.startLabel);
+        stopButton.setVisibility(presentation.showStop ? View.VISIBLE : View.GONE);
         boolean notified = notificationsAllowed();
         notificationStatus.setText(notified ? "通知 · 已开启" : "通知 · 未开启");
         notificationButton.setText(notified ? "管理通知" : "开启通知");
@@ -954,7 +956,7 @@ public class MainActivity extends Activity {
         if ("SERVICE_UNAVAILABLE".equals(progress.pauseReason) || !connected)
             return "截图服务尚未就绪 · 已保存图片保留";
         if ("STOPPED".equals(progress.pauseReason) || !running)
-            return "监测已停止 · 不再截图，队列保留等待手动开始";
+            return "截图队列已暂停 · 已保存图片保留，详见监测状态";
         if (ShizukuTaskGate.isEnabled(this) && !ShizukuTaskGate.get(this).hasPermission())
             return "Shizuku 未就绪 · 暂停新增截图，不自动回退；已保存图片仍可处理";
         if (!ShizukuTaskGate.isEnabled(this) && !UsageAccessGate.hasPermission(this))
@@ -968,8 +970,7 @@ public class MainActivity extends Activity {
     }
 
     private boolean canChangeMode() {
-        return SetupFlowPolicy.canChangeMode(FarmAccessibilityService.isRunning,
-                MonitorForegroundService.isActive, foregroundStartupPending);
+        return MonitorPresentation.from(MonitorCoordinator.getSnapshot(this), Build.VERSION.SDK_INT >= 30, true).modeEditable;
     }
 
     private RadioButton modeChoice(String text) {
