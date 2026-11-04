@@ -1,6 +1,8 @@
 package com.local.farmreminder;
 
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
@@ -8,7 +10,6 @@ import java.util.Locale;
 /** Notification presentation only; all reminder records remain unchanged. */
 final class ReminderNotificationText {
     private static final int MAX_EXPANDED_ITEMS = 5;
-    private static final int MAX_NAME_CODE_POINTS = 64;
 
     private ReminderNotificationText() {}
 
@@ -18,19 +19,22 @@ final class ReminderNotificationText {
 
     static String text(List<Reminder> reminders) {
         if (reminders.isEmpty()) return "暂无成熟提醒";
-        if (reminders.size() == 1) return displayName(reminders.get(0)) + "的作物即将成熟";
-        return reminders.size() + "条成熟提醒";
+        Reminder first = ordered(reminders).get(0);
+        String time = new SimpleDateFormat("HH:mm:ss", Locale.CHINA).format(new Date(first.matureAt));
+        if (reminders.size() == 1) return "成熟时间 " + time + " · " + lead(first);
+        return reminders.size() + "条提醒 · 最早成熟时间 " + time;
     }
 
     static String expandedText(List<Reminder> reminders) {
-        SimpleDateFormat time = new SimpleDateFormat("HH:mm:ss", Locale.getDefault());
+        SimpleDateFormat time = new SimpleDateFormat("M月d日 HH:mm:ss", Locale.CHINA);
+        List<Reminder> ordered = ordered(reminders);
         StringBuilder result = new StringBuilder();
         int shown = Math.min(reminders.size(), MAX_EXPANDED_ITEMS);
         for (int i = 0; i < shown; i++) {
             if (i > 0) result.append('\n');
-            Reminder reminder = reminders.get(i);
-            result.append(i + 1).append(". ").append(displayName(reminder))
-                    .append(" · ").append(time.format(new Date(reminder.matureAt))).append(" 成熟");
+            Reminder reminder = ordered.get(i);
+            result.append(i + 1).append(". 成熟时间 ").append(time.format(new Date(reminder.matureAt)))
+                    .append(" · ").append(lead(reminder));
         }
         if (reminders.size() > shown) {
             result.append('\n').append("另").append(reminders.size() - shown).append("条");
@@ -38,13 +42,24 @@ final class ReminderNotificationText {
         return result.toString();
     }
 
-    private static String displayName(Reminder reminder) {
-        String name = reminder.friend;
-        if (name == null || name.trim().isEmpty()) return "昵称未识别";
-        // Bound notification payload without cutting a surrogate pair or changing stored names.
-        if (name.codePointCount(0, name.length()) > MAX_NAME_CODE_POINTS) {
-            return name.substring(0, name.offsetByCodePoints(0, MAX_NAME_CODE_POINTS)) + "…";
+    static String avatarRef(List<Reminder> reminders) {
+        if (reminders == null) return "";
+        for (Reminder reminder : ordered(reminders)) {
+            String ref = AvatarRefPolicy.normalize(reminder.avatarRef);
+            if (!reminder.fired && !ref.isEmpty()) return ref;
         }
-        return name;
+        return "";
+    }
+
+    private static List<Reminder> ordered(List<Reminder> reminders) {
+        List<Reminder> ordered = new ArrayList<>(reminders);
+        ordered.sort(Comparator.comparingLong((Reminder r) -> r.matureAt).thenComparing(r -> r.id));
+        return ordered;
+    }
+
+    private static String lead(Reminder reminder) {
+        long seconds = Math.max(0, (reminder.matureAt - reminder.triggerAt) / 1000);
+        if (seconds == 0) return "成熟时提醒";
+        return "提前" + (seconds % 60 == 0 ? seconds / 60 + "分钟" : seconds + "秒") + "提醒";
     }
 }
