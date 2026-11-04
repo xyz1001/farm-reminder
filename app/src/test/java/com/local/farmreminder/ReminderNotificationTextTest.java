@@ -99,6 +99,36 @@ public class ReminderNotificationTextTest {
         assertEquals("", ReminderNotificationText.avatarRef(Collections.singletonList(r)));
     }
 
+    @Test public void optionalIdentityUsesTitleAndExpandedHeaderWhileKeepingTimeBodyAndCounts() {
+        List<Reminder> records = Arrays.asList(reminder("a", "stored-name", 3, 4, 5), reminder("b", "stored-name", 3, 4, 6));
+        NotificationIdentityLabel name = NotificationIdentityLabel.of("示例姓名", 148);
+        assertEquals("示例姓名 · 2条提醒", ReminderNotificationText.title(2, name));
+        assertEquals(ReminderNotificationText.text(records), ReminderNotificationText.text(records, name));
+        assertTrue(ReminderNotificationText.expandedText(records, name).startsWith("示例姓名\n1. 成熟时间 1月15日 03:04:05"));
+        NotificationIdentityLabel level = NotificationIdentityLabel.of(null, 148);
+        assertEquals("148级的好友 · 农场提醒", ReminderNotificationText.title(1, level));
+        assertFalse(ReminderNotificationText.expandedText(records, level).contains("stored-name"));
+    }
+
+    @Test public void absentOptionalIdentityExactlyPreservesGenericText() {
+        List<Reminder> records = Collections.singletonList(reminder("a", "stored-name", 3, 4, 5));
+        for (NotificationIdentityLabel label : new NotificationIdentityLabel[]{null, NotificationIdentityLabel.EMPTY}) {
+            assertEquals(ReminderNotificationText.title(1), ReminderNotificationText.title(1, label));
+            assertEquals(ReminderNotificationText.text(records), ReminderNotificationText.text(records, label));
+            assertEquals(ReminderNotificationText.expandedText(records), ReminderNotificationText.expandedText(records, label));
+        }
+        assertEquals("", ReminderNotificationText.expandedText(Collections.emptyList(), NotificationIdentityLabel.of("示例", null)));
+    }
+
+    @Test public void longOptionalTitlePreservesUnicodeSequencesForNativeEllipsizing() {
+        String longName = "👩‍🌾☀️".repeat(10);
+        NotificationIdentityLabel label = NotificationIdentityLabel.of(longName, null);
+        assertEquals(longName + " · 农场提醒", ReminderNotificationText.title(1, label));
+        assertTrue(ReminderNotificationText.expandedText(Collections.singletonList(reminder("a", "old", 3, 4, 5)), label)
+                .startsWith(longName + "\n"));
+        assertEquals(longName, label.text());
+    }
+
     private static Reminder reminder(String id, String friend, int hour, int minute, int second) {
         Calendar localTime = Calendar.getInstance(); localTime.clear();
         localTime.set(2026, Calendar.JANUARY, 15, hour, minute, second);

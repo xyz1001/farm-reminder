@@ -71,6 +71,7 @@ final class FrameTransaction {
                 if (reminder == null) {
                     reminder = new Reminder(); reminder.id = UUID.randomUUID().toString(); reminder.friend = "好友"; reminder.crop = "";
                     reminder.avatarRef = AvatarRefPolicy.normalize(avatarRef);
+                    reminder.sourceFrameRef = SourceFrameRefPolicy.normalize(id);
                     reminder.matureAt = maturity; reminder.triggerAt = maturity - Math.max(0, leadSeconds) * 1000L;
                     state.items.add(reminder); identity.addAnchor(reminder); added = true;
                 }

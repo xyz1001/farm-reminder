@@ -16,6 +16,11 @@ import java.util.List;
 /** Synchronous native presentation only; no asset I/O or store locks. Caller retains bitmap ownership. */
 final class ReminderNotifier {
     static boolean post(Context context, String id, List<Reminder> reminders, Bitmap preparedAvatar) {
+        return post(context, id, reminders, preparedAvatar, NotificationIdentityLabel.EMPTY);
+    }
+
+    static boolean post(Context context, String id, List<Reminder> reminders, Bitmap preparedAvatar,
+            NotificationIdentityLabel identity) {
         NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
         if (Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
                 != PackageManager.PERMISSION_GRANTED) return false;
@@ -40,8 +45,8 @@ final class ReminderNotifier {
 
         Notification.Builder builder = new Notification.Builder(context, plan.channelId)
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
-                .setContentTitle(reminders == null ? "农场提醒" : ReminderNotificationText.title(reminders.size()))
-                .setContentText(reminders == null ? "测试提醒" : ReminderNotificationText.text(reminders))
+                .setContentTitle(reminders == null ? "农场提醒" : ReminderNotificationText.title(reminders.size(), identity))
+                .setContentText(reminders == null ? "测试提醒" : ReminderNotificationText.text(reminders, identity))
                 .setContentIntent(actions.get(ReminderNotificationActions.contentTarget()))
                 .setAutoCancel(true);
         for (ReminderNotificationActions.Target target : ReminderNotificationActions.available(wechat != null)) {
@@ -51,7 +56,7 @@ final class ReminderNotifier {
                     target.label, actions.get(target)).build());
         }
         if (reminders != null) {
-            builder.setStyle(new Notification.BigTextStyle().bigText(ReminderNotificationText.expandedText(reminders)));
+            builder.setStyle(new Notification.BigTextStyle().bigText(ReminderNotificationText.expandedText(reminders, identity)));
             // Keep a small local avatar legible in the native template, not a stretched BigPicture poster.
             if (preparedAvatar != null && !preparedAvatar.isRecycled()) builder.setLargeIcon(preparedAvatar);
         }

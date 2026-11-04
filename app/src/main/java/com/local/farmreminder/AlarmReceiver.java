@@ -17,9 +17,12 @@ public class AlarmReceiver extends BroadcastReceiver {
     static { WORKER.allowCoreThreadTimeOut(true); }
 
     private static final class Prepared {
-        final String ref;
+        final NotificationIdentityBinding.Snapshot snapshot;
         final Bitmap bitmap;
-        Prepared(String ref, Bitmap bitmap) { this.ref = ref; this.bitmap = bitmap; }
+        final NotificationIdentityLabel label;
+        Prepared(NotificationIdentityBinding.Snapshot snapshot, Bitmap bitmap, NotificationIdentityLabel label) {
+            this.snapshot = snapshot; this.bitmap = bitmap; this.label = label;
+        }
     }
 
     @Override public void onReceive(Context context, Intent intent) {
@@ -37,15 +40,26 @@ public class AlarmReceiver extends BroadcastReceiver {
                     @Override public Prepared prepare() {
                         if (!"group".equals(kind)) return null;
                         ReminderStore store = new ReminderStore(context);
-                        return AlarmDeliveryWork.prepare(ReminderStore.LOCK, () -> {
-                            if (!store.ready()) return "";
+                        return AlarmDeliveryWork.prepareSnapshot(ReminderStore.LOCK, () -> {
+                            if (!store.ready()) return null;
                             for (ReminderGrouping.Group group : ReminderGrouping.plan(store.list())) {
                                 if (group.identity.equals(id) && group.due(System.currentTimeMillis()))
-                                    return ReminderNotificationText.avatarRef(group.reminders);
+                                    return NotificationIdentityBinding.select(group.identity, group.reminders);
                             }
-                            return "";
-                        }, ref -> new Prepared(ref, AvatarStore.load(context, ref, 65536)),
+                            return null;
+                        }, snapshot -> {
+                            Bitmap bitmap = snapshot.avatar.isEmpty() ? null : AvatarStore.load(context, snapshot.avatar, 65536);
+                            NotificationIdentityLabel label = NotificationIdentityLabel.EMPTY;
+                            if (!snapshot.source.isEmpty() && SystemClock.elapsedRealtime() < entryElapsed + 2250) {
+                                try { label = NotificationIdentityOcr.read(context, snapshot.source, entryElapsed + 2250); }
+                                catch (RuntimeException | OutOfMemoryError ignored) { }
+                            }
+                            return new Prepared(snapshot, bitmap, label == null ? NotificationIdentityLabel.EMPTY : label);
+                        },
                                 SystemClock::elapsedRealtime, entryElapsed);
+                    }
+                    @Override public Prepared budgetExpired(Prepared prepared) {
+                        return prepared == null ? null : new Prepared(prepared.snapshot, prepared.bitmap, NotificationIdentityLabel.EMPTY);
                     }
                     @Override public void deliver(Prepared prepared) {
                         dispatch(context, kind, id, timing, prepared);
@@ -56,7 +70,7 @@ public class AlarmReceiver extends BroadcastReceiver {
     private static void dispatch(Context context, String kind, String id,
                                  AlarmTimingDiagnostics.Sample timing, Prepared prepared) {
         if ("alarm".equals(kind)) {
-            if ("test".equals(id)) { try { notifyMeasured(context, id, null, null, timing); } catch (RuntimeException ignored) { } }
+            if ("test".equals(id)) { try { notifyMeasured(context, id, null, null, NotificationIdentityLabel.EMPTY, timing); } catch (RuntimeException ignored) { } }
             else new AlarmScheduler(context).rescheduleAll(); // Legacy broadcasts never dispatch individually.
             return;
         }
@@ -67,9 +81,11 @@ public class AlarmReceiver extends BroadcastReceiver {
                 public boolean ready() { return store.ready(); }
                 public List<Reminder> list() { return store.list(); }
                 public boolean notifyGroup(ReminderGrouping.Group group) {
-                    Bitmap bitmap = prepared != null && AlarmDeliveryWork.sameRef(prepared.ref, ReminderNotificationText.avatarRef(group.reminders))
-                            ? prepared.bitmap : null;
-                    return notifyMeasured(context, group.identity, group.reminders, bitmap, timing);
+                    NotificationIdentityBinding.Snapshot current = NotificationIdentityBinding.select(group.identity, group.reminders);
+                    Bitmap bitmap = prepared != null && NotificationIdentityBinding.sameAvatar(prepared.snapshot, current) ? prepared.bitmap : null;
+                    NotificationIdentityLabel label = prepared != null && NotificationIdentityBinding.sameSource(prepared.snapshot, current)
+                            ? prepared.label : NotificationIdentityLabel.EMPTY;
+                    return notifyMeasured(context, group.identity, group.reminders, bitmap, label, timing);
                 }
                 public boolean markFired(List<Reminder> reminders) { return store.markGroupFired(reminders); }
                 public void reconcile() { new AlarmScheduler(context).rescheduleAll(); }
@@ -77,11 +93,11 @@ public class AlarmReceiver extends BroadcastReceiver {
         }
     }
 
-    private static boolean notifyMeasured(Context context, String id, List<Reminder> reminders, Bitmap avatar,
+    private static boolean notifyMeasured(Context context, String id, List<Reminder> reminders, Bitmap avatar, NotificationIdentityLabel label,
                                           AlarmTimingDiagnostics.Sample timing) {
         long started = SystemClock.elapsedRealtime();
         boolean success = false; RuntimeException failure = null;
-        try { success = ReminderNotifier.post(context, id, reminders, avatar); return success; }
+        try { success = ReminderNotifier.post(context, id, reminders, avatar, label); return success; }
         catch (RuntimeException e) { failure = e; throw e; }
         finally {
             long elapsed = SystemClock.elapsedRealtime();

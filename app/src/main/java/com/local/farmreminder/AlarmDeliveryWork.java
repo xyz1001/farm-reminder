@@ -11,9 +11,12 @@ final class AlarmDeliveryWork {
     interface Work<T> {
         T prepare();
         void deliver(T prepared);
+        default T budgetExpired(T prepared) { return null; }
     }
     interface Snapshot { String ref(); }
     interface Loader<T> { T load(String ref); }
+    interface GroupSnapshot<S> { S read(); }
+    interface GroupLoader<S, T> { T load(S snapshot); }
 
     private AlarmDeliveryWork() { }
 
@@ -22,6 +25,13 @@ final class AlarmDeliveryWork {
         String ref;
         synchronized (lock) { ref = snapshot.ref(); }
         return ref == null || ref.isEmpty() || !withinBudget(clock.elapsed(), entryElapsed) ? null : loader.load(ref);
+    }
+
+    static <S, T> T prepareSnapshot(Object lock, GroupSnapshot<S> snapshot, GroupLoader<S, T> loader,
+                                    Clock clock, long entryElapsed) {
+        S value;
+        synchronized (lock) { value = snapshot.read(); }
+        return value == null || !withinBudget(clock.elapsed(), entryElapsed) ? null : loader.load(value);
     }
 
     static boolean sameRef(String prepared, String current) {
@@ -39,7 +49,7 @@ final class AlarmDeliveryWork {
                 if (withinBudget(clock.elapsed(), entryElapsed)) {
                     try { prepared = work.prepare(); }
                     catch (RuntimeException | OutOfMemoryError ignored) { }
-                    if (!withinBudget(clock.elapsed(), entryElapsed)) prepared = null;
+                    if (!withinBudget(clock.elapsed(), entryElapsed)) prepared = work.budgetExpired(prepared);
                 }
                 work.deliver(prepared);
             } finally { finishOnce.run(); }

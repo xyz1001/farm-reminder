@@ -106,4 +106,22 @@ public class AlarmDeliveryWorkTest {
         assertFalse(AlarmDeliveryWork.sameRef("first", null));
         assertFalse(AlarmDeliveryWork.sameRef("", ""));
     }
+    @Test public void lateIdentityDropsLabelButKeepsAlreadyLoadedAvatar() {
+        long[] clock = {100}; AtomicInteger delivered = new AtomicInteger(), finished = new AtomicInteger();
+        AlarmDeliveryWork.submit(Runnable::run, () -> clock[0], 100, new AlarmDeliveryWork.Work<String[]>() {
+            public String[] prepare() { clock[0] = 2600; return new String[]{"avatar", "identity"}; }
+            public String[] budgetExpired(String[] prepared) { return new String[]{prepared[0], ""}; }
+            public void deliver(String[] result) {
+                assertEquals("avatar", result[0]); assertEquals("", result[1]); delivered.incrementAndGet();
+            }
+        }, finished::incrementAndGet);
+        assertEquals(1, delivered.get()); assertEquals(1, finished.get());
+    }
+    @Test public void genericSnapshotMustRecheckBudgetAfterUnlock() {
+        Object lock = new Object(); long[] clock = {100}; AtomicInteger loaded = new AtomicInteger();
+        String result = AlarmDeliveryWork.prepareSnapshot(lock, () -> {
+            assertTrue(Thread.holdsLock(lock)); clock[0] = 2600; return "snapshot";
+        }, value -> { assertFalse(Thread.holdsLock(lock)); loaded.incrementAndGet(); return value; }, () -> clock[0], 100);
+        assertNull(result); assertEquals(0, loaded.get());
+    }
 }

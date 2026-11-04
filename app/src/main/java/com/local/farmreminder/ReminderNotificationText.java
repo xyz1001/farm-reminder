@@ -17,6 +17,25 @@ final class ReminderNotificationText {
         return count > 1 ? "农场提醒 · " + count + "条" : "农场提醒";
     }
 
+    static String title(int count, NotificationIdentityLabel identity) {
+        String label = identity == null ? "" : identity.text();
+        if (label.isEmpty()) return title(count);
+        // The validated label is bounded to 64 code points. Let native layout ellipsize it;
+        // manual UTF-16/code-point slicing could cut an emoji ZWJ/variation sequence.
+        return label + (count > 1 ? " · " + count + "条提醒" : " · 农场提醒");
+    }
+
+    static String text(List<Reminder> reminders, NotificationIdentityLabel identity) {
+        // Identity belongs in the title; keep seconds/advance notice readable in the compact body.
+        return text(reminders);
+    }
+
+    static String expandedText(List<Reminder> reminders, NotificationIdentityLabel identity) {
+        String detail = expandedText(reminders);
+        if (identity == null || identity.text().isEmpty() || reminders.isEmpty()) return detail;
+        return identity.text() + "\n" + detail;
+    }
+
     static String text(List<Reminder> reminders) {
         if (reminders.isEmpty()) return "暂无成熟提醒";
         Reminder first = ordered(reminders).get(0);

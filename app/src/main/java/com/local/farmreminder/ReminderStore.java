@@ -30,6 +30,7 @@ public class ReminderStore {
             JSONObject o = a.getJSONObject(i); Reminder r = new Reminder();
             r.id = o.getString("id"); r.friend = o.optString("friend", ""); r.crop = o.optString("crop", "");
             r.avatarRef = AvatarRefPolicy.normalize(o.optString("avatarRef", ""));
+            r.sourceFrameRef = SourceFrameRefPolicy.normalize(o.optString("sourceFrameRef", ""));
             r.matureAt = o.getLong("matureAt"); r.triggerAt = o.getLong("triggerAt"); r.fired = o.optBoolean("fired"); result.add(r);
         }
         return result;
@@ -38,7 +39,8 @@ public class ReminderStore {
         JSONArray a = new JSONArray();
         for (Reminder r : items) {
             JSONObject o = new JSONObject(); o.put("id", r.id); o.put("friend", r.friend); o.put("crop", r.crop);
-            o.put("matureAt", r.matureAt); o.put("triggerAt", r.triggerAt); o.put("fired", r.fired); o.put("avatarRef", AvatarRefPolicy.normalize(r.avatarRef)); a.put(o);
+            o.put("matureAt", r.matureAt); o.put("triggerAt", r.triggerAt); o.put("fired", r.fired); o.put("avatarRef", AvatarRefPolicy.normalize(r.avatarRef));
+            o.put("sourceFrameRef", SourceFrameRefPolicy.normalize(r.sourceFrameRef)); a.put(o);
         }
         return a.toString();
     }

@@ -20,6 +20,7 @@ public class FrameTransactionTest {
         for (Reminder r : source.items) {
             Reminder n = new Reminder(); n.id = r.id; n.friend = r.friend; n.crop = r.crop;
             n.avatarRef = r.avatarRef;
+            n.sourceFrameRef = r.sourceFrameRef;
             n.matureAt = r.matureAt; n.triggerAt = r.triggerAt; n.fired = r.fired; target.items.add(n);
         }
         for (Map.Entry<String, FrameTransaction.Receipt> e : source.receipts.entrySet()) target.receipts.put(e.getKey(), e.getValue());
@@ -179,5 +180,38 @@ public class FrameTransactionTest {
         assertTrue(result.committed); assertFalse(result.added); assertTrue(result.reminder.fired);
         assertEquals("", result.reminder.avatarRef); assertEquals("old name", result.reminder.friend);
         assertEquals("old crop", result.reminder.crop); assertEquals(15000, result.reminder.triggerAt);
+    }
+    @Test public void sourceRefOnlyOnNewAndNotBackfilledOnDuplicateOrReplay() throws Exception {
+        Shared shared = new Shared(); Adapter adapter = new Adapter(shared);
+        String firstId = "12345678-1234-1234-1234-123456789abc";
+        String secondId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        FrameTransaction.Result first = FrameTransaction.commit(adapter, firstId, "s", 1, 1, 1, 1000,
+                Collections.singletonList(10000L), 10, "");
+        assertEquals(firstId, first.reminder.sourceFrameRef);
+        FrameTransaction.Result duplicate = FrameTransaction.commit(adapter, secondId, "s", 1, 2, 2, 1000,
+                Collections.singletonList(10000L), 10, "");
+        assertFalse(duplicate.added); assertEquals(firstId, duplicate.reminder.sourceFrameRef);
+        FrameTransaction.Result replay = FrameTransaction.commit(adapter, firstId, "s", 1, 3, 3, 1000,
+                Collections.singletonList(90000L), 10, "");
+        assertTrue(replay.replay); assertEquals(firstId, replay.reminder.sourceFrameRef);
+        FrameTransaction.State mark = adapter.read(); mark.items.get(0).fired = true; assertTrue(adapter.write(mark));
+        reopen(shared); assertTrue(shared.memory.items.get(0).fired); assertEquals(firstId, shared.memory.items.get(0).sourceFrameRef);
+        FrameTransaction.Result fake = FrameTransaction.commit(adapter, "legacy-fake", "s", 1, 4, 4, 1000,
+                Collections.singletonList(90000L), 10, "");
+        assertTrue(fake.added); assertEquals("", fake.reminder.sourceFrameRef);
+        String third = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+        FrameTransaction.Result oldDuplicate = FrameTransaction.commit(adapter, third, "s", 1, 5, 5, 1000,
+                Collections.singletonList(90000L), 10, "");
+        assertFalse(oldDuplicate.added); assertEquals("", oldDuplicate.reminder.sourceFrameRef);
+    }
+    @Test public void sourceRefSurvivesFailedWriteRepairAndReplay() throws Exception {
+        Shared shared = new Shared(); Adapter adapter = new Adapter(shared);
+        String id = "12345678-1234-1234-1234-123456789abc";
+        shared.failWrite = true;
+        assertFalse(FrameTransaction.commit(adapter, id, "s", 1, 1, 1, 1000, Collections.singletonList(10000L), 10, "").committed);
+        assertEquals(id, shared.memory.items.get(0).sourceFrameRef);
+        assertTrue(shared.disk.items.isEmpty()); shared.failWrite = false;
+        FrameTransaction.Result result = FrameTransaction.commit(adapter, id, "s", 1, 1, 1, 1000, Collections.singletonList(10000L), 10, "");
+        assertTrue(result.replay); assertEquals(id, result.reminder.sourceFrameRef); assertEquals(id, shared.disk.items.get(0).sourceFrameRef);
     }
 }
