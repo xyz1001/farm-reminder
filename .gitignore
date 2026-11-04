@@ -13,3 +13,4 @@ sdk/
 *.key
 .env
 .env.*
+.slim/deepwork/

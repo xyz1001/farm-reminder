@@ -67,6 +67,7 @@ public final class DurableFrameEngine {
     private DiskFrameStore store;
     private TextRecognizer recognizer;
     private long processed, captured;
+    private volatile long diagnosticAttempt;
     private DiskFrameStore.Snapshot snapshot = new DiskFrameStore.Snapshot();
 
     private DurableFrameEngine(Context context) {
@@ -108,11 +109,17 @@ public final class DurableFrameEngine {
     public boolean start(Listener listener) {
         if (Looper.myLooper() != Looper.getMainLooper()) throw new IllegalStateException("start must run on main thread");
         final long token;
+        int rejectedState = 0;
         synchronized (listenerLock) {
             token = fence.start();
-            if (token < 0) return false;
-            this.listener = listener; listenerEpoch = token;
+            if (token < 0) rejectedState = fence.diagnosticState();
+            else { this.listener = listener; listenerEpoch = token; }
         }
+        if (token < 0) {
+            LifecycleDiagnostics.engineReject(context, LifecycleDiagnostics.current(context), rejectedState);
+            return false;
+        }
+        diagnosticAttempt = LifecycleDiagnostics.current(context);
         disk.execute(() -> {
             update();
             if (storageFailed && !recoverStore()) { fatal(token, "STORAGE_FAILED"); return; }
@@ -240,8 +247,10 @@ public final class DurableFrameEngine {
         final Bitmap bitmap = decode(store.image(frame), frame.imageHasAlpha);
         if (bitmap == null) { fail(frame, "DECODE_FAILED", token, false); finishFrame(); return; }
         if (!fence.beginModel(token)) { bitmap.recycle(); returnPending(frame); finishFrame(); return; }
+        final long attempt = diagnosticAttempt;
         Runnable watchdog = () -> {
             if (fence.timeout(token)) {
+                LifecycleDiagnostics.event(context, attempt, LifecycleHistory.Event.OCR_WATCHDOG, LifecycleHistory.Reason.OCR_TIMEOUT, null);
                 updateOnDisk();
                 Listener l = listener; if (l != null && listenerEpoch == token) l.onFatal("OCR_TIMEOUT");
             }
@@ -336,7 +345,8 @@ public final class DurableFrameEngine {
     }
     private void storageError(long token) { storageFailed = true; update(); fatal(token, "STORAGE_FAILED"); }
     private void fatal(long token, String status) {
-        main.post(() -> { if (fence.valid(token)) { fence.stop(); Listener l = listener; if (l != null) l.onFatal(status); updateOnDisk(); } });
+        long attempt = diagnosticAttempt;
+        main.post(() -> { if (fence.valid(token)) { fence.stop(); LifecycleDiagnostics.event(context, attempt, LifecycleHistory.Event.STORAGE_FATAL, LifecycleHistory.Reason.STORAGE_FAILED, null); Listener l = listener; if (l != null) l.onFatal(status); updateOnDisk(); } });
     }
     private void updateOnDisk() { disk.execute(this::update); }
 }

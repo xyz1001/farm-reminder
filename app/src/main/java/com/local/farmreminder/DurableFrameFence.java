@@ -32,6 +32,7 @@ final class DurableFrameFence {
     }
     synchronized boolean modelActive() { return nativeActive; }
     synchronized boolean frameActive() { return frameActive; }
+    synchronized int diagnosticState() { return (running ? 1 : 0) | (frameActive ? 2 : 0) | (nativeActive ? 4 : 0) | (transaction ? 8 : 0); }
     synchronized boolean canRecover() { return !frameActive && !transaction; }
     synchronized boolean shouldNotifyFailure(long token) { return valid(token); }
 

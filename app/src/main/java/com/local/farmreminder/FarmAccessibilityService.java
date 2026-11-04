@@ -37,6 +37,7 @@ public class FarmAccessibilityService extends AccessibilityService {
     private static volatile FarmAccessibilityService instance;
     private static volatile DurableFrameEngine engine;
     private static final FramePipeline<Bitmap> capture = new FramePipeline<>(Bitmap::recycle);
+    private static long captureAttempt;
     private static final AtomicLong NEXT_INSTANCE = new AtomicLong();
     private static final String CAPTURE_BLOCKED = "截图任务未结束，暂不可启动；等待完成或重启本提醒应用进程";
     private final long instanceSequence = NEXT_INSTANCE.incrementAndGet();
@@ -161,6 +162,9 @@ public class FarmAccessibilityService extends AccessibilityService {
         }
     }
     private boolean alive() { return InstanceOwner.alive(instance, this, destroyed); }
+    private void lifecycle(LifecycleHistory.Event event, LifecycleHistory.Reason reason) {
+        LifecycleDiagnostics.event(this, LifecycleDiagnostics.current(this), event, reason, null);
+    }
     private static DurableFrameEngine engine(Context context) {
         DurableFrameEngine e = DurableFrameEngine.get(context.getApplicationContext());
         engine = e; return e;
@@ -202,6 +206,7 @@ public class FarmAccessibilityService extends AccessibilityService {
         FarmAccessibilityService previous = instance;
         if (previous != null) previous.retire();
         instance = this; isConnected = true; isRunning = false;
+        lifecycle(LifecycleHistory.Event.ACCESS_CONNECT, LifecycleHistory.Reason.NONE);
         entryDebug = (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
         entryFeedback.enable(entryDebug);
         AccessibilityServiceInfo info = getServiceInfo();
@@ -226,10 +231,11 @@ public class FarmAccessibilityService extends AccessibilityService {
         if (!alive()) return;
         if (!start) { stopSession(true); return; }
         if (isRunning) return;
-        if (capture.captureBusy()) { lastStatus = CAPTURE_BLOCKED; reason = lastStatus; publish(); return; }
+        if (capture.captureBusy()) { lifecycle(LifecycleHistory.Event.ACCESS_START_REJECT, LifecycleHistory.Reason.CAPTURE_BUSY); lastStatus = CAPTURE_BLOCKED; reason = lastStatus; publish(); return; }
         DurableFrameEngine e = engine(this);
-        if (!e.start(listener)) { lastStatus = "识别任务未结束，请等待完成后重试"; reason = lastStatus; publish(); return; }
+        if (!e.start(listener)) { lifecycle(LifecycleHistory.Event.ACCESS_START_REJECT, LifecycleHistory.Reason.ENGINE_BUSY); lastStatus = "识别任务未结束，请等待完成后重试"; reason = lastStatus; publish(); return; }
         runEpoch = e.epoch(); shizukuMode = ShizukuTaskGate.isEnabled(this); isRunning = true;
+        lifecycle(LifecycleHistory.Event.ACCESS_START_OK, LifecycleHistory.Reason.NONE);
         entryFeedback.start(shizukuMode ? "SHIZUKU" : "USAGE", SystemClock.elapsedRealtime());
         if (shizukuMode) ShizukuTaskGate.get(this).start();
         announcementPolicy.reset();
@@ -240,6 +246,7 @@ public class FarmAccessibilityService extends AccessibilityService {
     }
     private void stopSession(boolean stopEngine) {
         if (!alive()) return;
+        if (isRunning) lifecycle(LifecycleHistory.Event.ACCESS_STOP, LifecycleHistory.Reason.NONE);
         if (stopEngine && engine != null && isRunning && engine.epoch() == runEpoch) engine.stop();
         if (shizukuMode) ShizukuTaskGate.get(this).stop();
         isRunning = false; handler.removeCallbacks(sample); containerPolicy.clear(); foregroundKey = null; candidateClass = null; policy.invalidate();
@@ -256,8 +263,9 @@ public class FarmAccessibilityService extends AccessibilityService {
         if (receiverRegistered) { try { unregisterReceiver(screenReceiver); } catch (IllegalArgumentException ignored) { } receiverRegistered = false; }
     }
     @Override public void onAccessibilityEvent(AccessibilityEvent event) { }
-    @Override public void onInterrupt() { if (alive()) { stopSession(true); lastStatus = "服务中断，请重新启动"; } }
+    @Override public void onInterrupt() { if (alive()) { lifecycle(LifecycleHistory.Event.ACCESS_INTERRUPT, LifecycleHistory.Reason.INTERRUPT); stopSession(true); lastStatus = "服务中断，请重新启动"; } }
     @Override public boolean onUnbind(Intent intent) {
+        if (alive()) lifecycle(LifecycleHistory.Event.ACCESS_UNBIND, LifecycleHistory.Reason.UNBIND);
         if (alive()) { stopSession(true); detachListener(); isConnected = false; instance = null; lastStatus = "服务断开，请重新启动监测"; }
         return super.onUnbind(intent);
     }
@@ -305,6 +313,7 @@ public class FarmAccessibilityService extends AccessibilityService {
     private boolean updateForeground() {
         if (!alive()) return false;
         if (isRunning && shizukuMode != ShizukuTaskGate.isEnabled(this)) {
+            lifecycle(LifecycleHistory.Event.ACCESS_STOP, LifecycleHistory.Reason.SOURCE_CHANGED);
             stopSession(true); reason = "前台来源已更改，监测已停止，请重新启动"; lastStatus = reason; publish(); return false;
         }
         UsageForegroundPolicy.Candidate candidate = null;
@@ -390,6 +399,7 @@ public class FarmAccessibilityService extends AccessibilityService {
         long uptime = SystemClock.uptimeMillis(), wall = System.currentTimeMillis();
         long request = capture.beginCapture(uptime);
         if (request == 0) return;
+        captureAttempt = LifecycleDiagnostics.current(this);
         String session = captureSession; long sequence = ++captureSequence;
         long epoch = runEpoch;
         if (!containerPolicy.begin(session, epoch, sequence)) { capture.endCapture(request); schedule(); return; }
@@ -397,13 +407,14 @@ public class FarmAccessibilityService extends AccessibilityService {
         if (containerPolicy.pending(session, epoch, sequence)) entryFeedback.probe(containerPolicy.state().name(), SystemClock.elapsedRealtime());
         policy.captured(now); armWatchdog(request, uptime);
         try {
-            if (Build.VERSION.SDK_INT >= 30) takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, callback(session, epoch, sequence, request, uptime, wall));
+            if (Build.VERSION.SDK_INT >= 30) takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, callback(session, epoch, sequence, request, uptime, wall, captureAttempt));
         } catch (RuntimeException e) {
+            LifecycleDiagnostics.event(this, LifecycleDiagnostics.current(this), LifecycleHistory.Event.CAPTURE_FAILURE, LifecycleHistory.Reason.EXCEPTION, e);
             failProbe(session, epoch, sequence, EntryFeedbackDiagnostics.Reason.SCREENSHOT_FAILURE); capture.endCapture(request); errors++; reason = "USAGE_VERIFY_FAILED：截图请求失败"; lastStatus = reason; publish(); schedule();
         }
     }
     @android.annotation.TargetApi(30)
-    private TakeScreenshotCallback callback(String session, long epoch, long sequence, long request, long requestUptime, long requestWall) {
+    private TakeScreenshotCallback callback(String session, long epoch, long sequence, long request, long requestUptime, long requestWall, long attempt) {
         return new TakeScreenshotCallback() {
             @Override public void onSuccess(ScreenshotResult result) {
                 HardwareBuffer buffer = result.getHardwareBuffer(); Bitmap hardware = null, copy = null;
@@ -429,17 +440,24 @@ public class FarmAccessibilityService extends AccessibilityService {
                     engine(FarmAccessibilityService.this).accept(copy, frame); acceptedSequences.add(sequence); copy = null; screenshots++;
                     if (shizukuMode) announceIfAllowed();
                 } catch (RuntimeException e) {
+                    LifecycleDiagnostics.event(FarmAccessibilityService.this, attempt, LifecycleHistory.Event.CAPTURE_FAILURE, LifecycleHistory.Reason.EXCEPTION, e);
                     failProbe(session, epoch, sequence, EntryFeedbackDiagnostics.Reason.SCREENSHOT_FAILURE); errors++;
                     if (current && alive()) { reason = "USAGE_VERIFY_FAILED：截图保存交接失败"; lastStatus = reason; }
                 } finally {
-                    capture.endCapture(request);
+                    boolean timedOut = capture.captureTimedOut() && capture.captureId() == request;
+                    boolean released = capture.endCapture(request);
+                    LifecycleDiagnostics.captureReleased(FarmAccessibilityService.this, attempt, timedOut, released);
                     if (hardware != null) hardware.recycle(); if (buffer != null) buffer.close(); if (copy != null) copy.recycle();
                     if (alive()) { publish(); if (isRunning) schedule(); }
                 }
             }
             @Override public void onFailure(int code) {
                 boolean current = currentCapture(session, epoch, sequence, request);
-                failProbe(session, epoch, sequence, EntryFeedbackDiagnostics.Reason.SCREENSHOT_FAILURE); capture.endCapture(request);
+                boolean timedOut = capture.captureTimedOut() && capture.captureId() == request;
+                failProbe(session, epoch, sequence, EntryFeedbackDiagnostics.Reason.SCREENSHOT_FAILURE);
+                boolean released = capture.endCapture(request);
+                LifecycleDiagnostics.event(FarmAccessibilityService.this, attempt, LifecycleHistory.Event.CAPTURE_FAILURE, LifecycleHistory.Reason.NONE, null);
+                LifecycleDiagnostics.captureReleased(FarmAccessibilityService.this, attempt, timedOut, released);
                 if (current && alive()) {
                     errors++;
                     if (code == ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT) nextCaptureAllowed = SystemClock.elapsedRealtime() + 2000;
@@ -465,8 +483,10 @@ public class FarmAccessibilityService extends AccessibilityService {
         if (alive() && engine != null && runEpoch != 0) engine.detach(listener, runEpoch);
     }
     private void armWatchdog(long request, long started) {
+        long attempt = captureAttempt;
         handler.postDelayed(() -> {
             if (!alive() || !capture.timeoutCapture(request, SystemClock.uptimeMillis())) return;
+            LifecycleDiagnostics.event(this, attempt, LifecycleHistory.Event.CAPTURE_WATCHDOG, LifecycleHistory.Reason.WATCHDOG, null);
             if (isRunning) stopSession(true);
             reason = CAPTURE_BLOCKED; lastStatus = reason; publish();
         }, Math.max(0, FramePipeline.REQUEST_TIMEOUT_MS - (SystemClock.uptimeMillis() - started)));
@@ -509,12 +529,14 @@ public class FarmAccessibilityService extends AccessibilityService {
                     + " captureInFlight=" + capture.captureBusy() + " captureTimeout=" + capture.captureTimedOut()
                     + " foregroundServiceErrorPresent=" + !MonitorForegroundService.lastError.isEmpty());
             writer.println(entryFeedback.snapshot(SystemClock.elapsedRealtime()));
+            writer.println("lifecycle generation|attempt|elapsedMs|wallMs|event|reason|bits|exceptionClass; bits: ENGINE_REJECT=running,frameActive,nativeActive,transaction; other events=connected,running,fgs,reserved\n" + LifecycleDiagnostics.snapshot(this));
             writer.println("cachedPublished " + dumpSnapshot);
             ShizukuTaskGate gate = ShizukuTaskGate.peek();
             writer.println(gate == null ? "gate=not_initialized" : gate.debugSnapshot());
         }
     }
     @Override public void onDestroy() {
+        if (alive()) lifecycle(LifecycleHistory.Event.ACCESS_DESTROY, LifecycleHistory.Reason.DESTROY);
         if (alive()) { stopSession(true); detachListener(); isConnected = false; instance = null; lastStatus = "服务断开，请重新启动监测"; }
         destroyed = true; handler.removeCallbacks(sample);
         if (receiverRegistered) { try { unregisterReceiver(screenReceiver); } catch (IllegalArgumentException ignored) { } receiverRegistered = false; }

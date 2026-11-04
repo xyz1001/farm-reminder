@@ -61,6 +61,7 @@ public class MainActivity extends Activity {
     private int leadSeconds;
     private boolean resumed;
     private boolean foregroundStartupPending, foregroundRequestFailed;
+    private long lifecycleAttempt;
     private long foregroundStartupDeadline;
     private String foregroundErrorBeforeStart = "";
     private String listSignature = "";
@@ -102,6 +103,7 @@ public class MainActivity extends Activity {
             ArrayList<String> expanded = state.getStringArrayList("expandedGroups");
             if (expanded != null) expandedGroups.addAll(expanded);
             foregroundStartupPending = state.getBoolean("foregroundStartupPending", false);
+            lifecycleAttempt = state.getLong("lifecycleGeneration", 0) == LifecycleDiagnostics.generation(this) ? state.getLong("lifecycleAttempt", 0) : 0;
             foregroundStartupDeadline = state.getLong("foregroundStartupDeadline", 0);
             foregroundErrorBeforeStart = state.getString("foregroundErrorBeforeStart", "");
             currentPage = state.getString("currentPage", "home");
@@ -313,18 +315,27 @@ public class MainActivity extends Activity {
     }
 
     private void requestMonitoring() {
-        if (foregroundStartupPending || MonitorForegroundService.isActive || FarmAccessibilityService.isRunning) return;
+        long clickAttempt = LifecycleDiagnostics.click(this);
+        LifecycleDiagnostics.event(this, clickAttempt, LifecycleHistory.Event.UI_CLICK, LifecycleHistory.Reason.NONE, null);
+        if (foregroundStartupPending || MonitorForegroundService.isActive || FarmAccessibilityService.isRunning) {
+            LifecycleDiagnostics.event(this, clickAttempt, LifecycleHistory.Event.SETUP_REJECT, LifecycleHistory.Reason.ALREADY_ACTIVE, null); return;
+        }
         if (setupStep() != SetupFlowPolicy.Step.READY) {
+            LifecycleDiagnostics.event(this, clickAttempt, LifecycleHistory.Event.SETUP_REJECT, LifecycleHistory.Reason.SETUP, null);
             setupVisible = true; reviewMode = false; backStep = null; refresh(); return;
         }
+        lifecycleAttempt = clickAttempt;
+        LifecycleDiagnostics.setCurrent(this, lifecycleAttempt);
         try {
             foregroundErrorBeforeStart = MonitorForegroundService.lastError;
-            MonitorForegroundService.requestStart(this);
+            LifecycleDiagnostics.event(this, lifecycleAttempt, LifecycleHistory.Event.START_REQUEST, LifecycleHistory.Reason.NONE, null);
+            MonitorForegroundService.requestStart(this, lifecycleAttempt);
             foregroundStartupPending = true;
             foregroundRequestFailed = false;
             foregroundStartupDeadline = SystemClock.uptimeMillis() + 5000;
             clearFeedback();
         } catch (RuntimeException e) {
+            LifecycleDiagnostics.event(this, lifecycleAttempt, LifecycleHistory.Event.START_REQUEST, LifecycleHistory.Reason.EXCEPTION, e);
             foregroundStartupPending = false;
             foregroundRequestFailed = true;
             showFeedback("无法启动，请检查截图服务后重试");
@@ -578,6 +589,8 @@ public class MainActivity extends Activity {
         state.putBoolean("exportPicking", exportState.picking);
         state.putBoolean("exportBusy", exportState.busy);
         state.putBoolean("foregroundStartupPending", foregroundStartupPending);
+        state.putLong("lifecycleGeneration", LifecycleDiagnostics.generation(this));
+        state.putLong("lifecycleAttempt", lifecycleAttempt);
         state.putLong("foregroundStartupDeadline", foregroundStartupDeadline);
         state.putString("foregroundErrorBeforeStart", foregroundErrorBeforeStart);
         state.putString("currentPage", currentPage);
@@ -700,12 +713,15 @@ public class MainActivity extends Activity {
                 && !serviceError.equals(foregroundErrorBeforeStart);
         if (foregroundStartupPending) {
             if (foregroundActive) {
+                LifecycleDiagnostics.event(this, lifecycleAttempt, LifecycleHistory.Event.PENDING_CONFIRMED, LifecycleHistory.Reason.NONE, null);
                 foregroundStartupPending = false;
                 clearFeedback();
             } else if (newServiceError) {
+                LifecycleDiagnostics.event(this, lifecycleAttempt, LifecycleHistory.Event.PENDING_FAILED, LifecycleHistory.Reason.NOT_RUNNING, null);
                 foregroundStartupPending = false;
                 showFeedback("启动失败，请检查截图服务后重试");
             } else if (SystemClock.uptimeMillis() >= foregroundStartupDeadline) {
+                LifecycleDiagnostics.event(this, lifecycleAttempt, LifecycleHistory.Event.PENDING_TIMEOUT, LifecycleHistory.Reason.NONE, null);
                 foregroundStartupPending = false;
                 showFeedback("启动尚未确认，请检查后重试");
             }

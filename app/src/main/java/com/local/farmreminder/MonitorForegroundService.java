@@ -27,12 +27,16 @@ public class MonitorForegroundService extends Service {
     private boolean foregroundStarted;
     private String lastContent;
     private long lastRefresh;
+    private long lifecycleAttempt;
+    private static final String EXTRA_ATTEMPT = "lifecycle_attempt";
+    private static final String EXTRA_GENERATION = "lifecycle_generation";
 
-    public static void requestStart(Context context) throws RuntimeException {
-        context.startForegroundService(new Intent(context, MonitorForegroundService.class).setAction(ACTION_START));
+    public static void requestStart(Context context, long attempt) throws RuntimeException {
+        context.startForegroundService(new Intent(context, MonitorForegroundService.class).setAction(ACTION_START).putExtra(EXTRA_ATTEMPT, attempt).putExtra(EXTRA_GENERATION, LifecycleDiagnostics.generation(context)));
     }
 
     public static void requestStop(Context context) {
+        LifecycleDiagnostics.event(context, LifecycleDiagnostics.current(context), LifecycleHistory.Event.USER_STOP, LifecycleHistory.Reason.USER, null);
         FarmAccessibilityService.setMonitoring(context, false);
         context.stopService(new Intent(context, MonitorForegroundService.class));
     }
@@ -44,10 +48,13 @@ public class MonitorForegroundService extends Service {
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? null : intent.getAction();
+        if (ACTION_START.equals(action)) lifecycleAttempt = intent.getLongExtra(EXTRA_GENERATION, 0) == LifecycleDiagnostics.generation(this) ? intent.getLongExtra(EXTRA_ATTEMPT, 0) : 0;
+        LifecycleDiagnostics.event(this, lifecycleAttempt, LifecycleHistory.Event.FGS_ACTION, ACTION_STOP.equals(action) ? LifecycleHistory.Reason.USER : LifecycleHistory.Reason.NONE, null);
         MonitorSessionPolicy.Action requested = ACTION_START.equals(action) ? MonitorSessionPolicy.Action.START
                 : ACTION_STOP.equals(action) ? MonitorSessionPolicy.Action.STOP : MonitorSessionPolicy.Action.IGNORE;
         switch (MonitorSessionPolicy.decide(requested, foregroundStarted, FarmAccessibilityService.isRunning)) {
             case STOP:
+                LifecycleDiagnostics.event(this, lifecycleAttempt, LifecycleHistory.Event.FGS_REFUSE, requested == MonitorSessionPolicy.Action.START ? LifecycleHistory.Reason.NOT_RUNNING : LifecycleHistory.Reason.USER, null);
                 if (requested == MonitorSessionPolicy.Action.START) lastError = FarmAccessibilityService.lastStatus;
                 endSession();
                 break;
@@ -67,6 +74,7 @@ public class MonitorForegroundService extends Service {
     private void startSession() {
         lastError = "";
         try {
+            LifecycleDiagnostics.event(this, lifecycleAttempt, LifecycleHistory.Event.FGS_PROMOTE_BEGIN, LifecycleHistory.Reason.NONE, null);
             NotificationChannel channel = new NotificationChannel(CHANNEL, "监测会话", NotificationManager.IMPORTANCE_LOW);
             channel.setSound(null, null);
             channel.enableVibration(false);
@@ -78,18 +86,22 @@ public class MonitorForegroundService extends Service {
             else startForeground(NOTIFICATION_ID, notification);
             foregroundStarted = true;
             isActive = true;
+            LifecycleDiagnostics.event(this, lifecycleAttempt, LifecycleHistory.Event.FGS_PROMOTE_OK, LifecycleHistory.Reason.NONE, null);
             if (Build.VERSION.SDK_INT < 30) {
+                LifecycleDiagnostics.event(this, lifecycleAttempt, LifecycleHistory.Event.FGS_REFUSE, LifecycleHistory.Reason.UNSUPPORTED, null);
                 lastError = "Android 11 以下不支持无障碍截图";
                 endSession();
                 return;
             }
             if (!FarmAccessibilityService.isConnected) {
+                LifecycleDiagnostics.event(this, lifecycleAttempt, LifecycleHistory.Event.FGS_REFUSE, LifecycleHistory.Reason.NOT_CONNECTED, null);
                 lastError = "无障碍服务未连接，请先启用并等待连接";
                 endSession();
                 return;
             }
             FarmAccessibilityService.setMonitoring(this, true);
             if (MonitorSessionPolicy.shouldEnd(foregroundStarted, FarmAccessibilityService.isConnected, FarmAccessibilityService.isRunning)) {
+                LifecycleDiagnostics.event(this, lifecycleAttempt, LifecycleHistory.Event.FGS_REFUSE, LifecycleHistory.Reason.NOT_RUNNING, null);
                 lastError = FarmAccessibilityService.lastStatus;
                 endSession();
                 return;
@@ -98,6 +110,7 @@ public class MonitorForegroundService extends Service {
             lastRefresh = 0;
             handler.post(tick);
         } catch (RuntimeException e) {
+            LifecycleDiagnostics.event(this, lifecycleAttempt, LifecycleHistory.Event.FGS_EXCEPTION, LifecycleHistory.Reason.EXCEPTION, e);
             lastError = "前台监测启动失败：" + e.getClass().getSimpleName()
                     + (e.getMessage() == null ? "" : "（" + e.getMessage() + "）");
             endSession();
@@ -109,6 +122,7 @@ public class MonitorForegroundService extends Service {
         @Override public void run() {
             if (owner != MonitorForegroundService.this || !foregroundStarted) return;
             if (MonitorSessionPolicy.shouldEnd(foregroundStarted, FarmAccessibilityService.isConnected, FarmAccessibilityService.isRunning)) {
+                LifecycleDiagnostics.event(MonitorForegroundService.this, lifecycleAttempt, LifecycleHistory.Event.FGS_TICK_STOP, LifecycleHistory.Reason.NOT_RUNNING, null);
                 lastError = FarmAccessibilityService.lastStatus;
                 endSession();
                 return;
@@ -159,6 +173,7 @@ public class MonitorForegroundService extends Service {
     }
 
     @Override public void onDestroy() {
+        LifecycleDiagnostics.event(this, lifecycleAttempt, LifecycleHistory.Event.FGS_DESTROY, LifecycleHistory.Reason.DESTROY, null);
         handler.removeCallbacks(tick);
         if (owner == this) {
             FarmAccessibilityService.setMonitoring(this, false);
