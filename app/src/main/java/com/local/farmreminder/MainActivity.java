@@ -53,6 +53,8 @@ public class MainActivity extends Activity {
     private Button startButton, stopButton, retryButton, notificationButton, exactButton, clearButton;
     private Button exportButton;
     private TextView exportStatus;
+    private TextView vibrationStatus, setupVibrationStatus;
+    private TextView vibrationHint, setupVibrationHint;
     private ExportState exportState;
     private LinearLayout reminders;
     private SharedPreferences settings;
@@ -231,6 +233,9 @@ public class MainActivity extends Activity {
         notificationButton = button(permissions, "管理通知", false, 7, this::requestNotifications);
         exactStatus = addText(permissions, "", 14, INK, false, 16);
         exactButton = button(permissions, "管理精确闹钟（可选）", false, 7, this::requestExactAlarm);
+        LinearLayout notificationSettings = card(settingsPage, 16, Color.WHITE);
+        vibrationStatus = buildNotificationSettings(notificationSettings);
+        vibrationHint = notificationSettingsHint(notificationSettings);
         LinearLayout timing = card(settingsPage, 16, Color.WHITE);
         addText(timing, "提前多久提醒", 18, INK, true, 0);
         addText(timing, "仅用于新记录的提醒", 12, MUTED, false, 7);
@@ -311,6 +316,37 @@ public class MainActivity extends Activity {
             reviewMode = false; backStep = null; setupVisible = false; currentPage = "home"; refresh();
         });
         setupBack = button(setupPage, "返回", false, 8, this::navigateBack);
+        LinearLayout notificationSettings = card(setupPage, 24, Color.WHITE);
+        setupVibrationStatus = buildNotificationSettings(notificationSettings);
+        setupVibrationHint = notificationSettingsHint(notificationSettings);
+    }
+
+    private TextView buildNotificationSettings(LinearLayout parent) {
+        addText(parent, "通知与振动", 18, INK, true, 0);
+        TextView status = addText(parent, "", 14, INK, false, 10);
+        button(parent, "通知与振动设置", false, 10, () -> {
+            NotificationSettingsPolicy.Target opened = NotificationSettingsNavigator.open(this);
+            showMessage(opened == null ? "无法打开设置，请在系统设置中找到本应用并调整。"
+                    : "请在系统设置中调整通知与振动，返回后将刷新状态。");
+        });
+        return status;
+    }
+
+    private TextView notificationSettingsHint(LinearLayout parent) {
+        return addText(parent, "", 12, MUTED, false, 8);
+    }
+
+    private void refreshNotificationSettings() {
+        NotificationSettingsPolicy.State state = NotificationSettingsNavigator.read(this);
+        String hint = (state == NotificationSettingsPolicy.State.VIBRATION_OFF
+                ? "点击上方按钮，开启渠道的振动。\n" : "")
+                + "需在系统设置中开启；实际振动还受勿扰等设置影响。";
+        for (TextView status : new TextView[]{vibrationStatus, setupVibrationStatus}) {
+            if (!state.label.contentEquals(status.getText())) status.setText(state.label);
+        }
+        for (TextView label : new TextView[]{vibrationHint, setupVibrationHint}) {
+            if (!hint.contentEquals(label.getText())) label.setText(hint);
+        }
     }
 
     private void requestMonitoring() {
@@ -782,6 +818,7 @@ public class MainActivity extends Activity {
         boolean notified = notificationsAllowed();
         notificationStatus.setText(notified ? "通知 · 已开启" : "通知 · 未开启");
         notificationButton.setText(notified ? "管理通知" : "开启通知");
+        refreshNotificationSettings();
         boolean exact = scheduler.canScheduleExact();
         exactStatus.setText(exact ? "精确闹钟 · 已开启" : "精确闹钟 · 可选，未开启可能延迟");
         renderNavigation();

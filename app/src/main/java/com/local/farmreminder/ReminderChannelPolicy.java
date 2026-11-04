@@ -31,5 +31,10 @@ final class ReminderChannelPolicy {
         return new Plan(HEADS_UP_ID, true, legacyImportance == null || legacyVibrates);
     }
 
+    /** Read-only settings target, including the blocked legacy channel that suppresses delivery. */
+    static String settingsChannelId(Integer legacyImportance, Plan plan) {
+        return legacyImportance != null && legacyImportance == 0 ? LEGACY_ID : plan.channelId;
+    }
+
     private ReminderChannelPolicy() { }
 }

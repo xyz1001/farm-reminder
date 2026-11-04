@@ -52,21 +52,9 @@ public class AlarmReceiver extends BroadcastReceiver {
         NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
         if (Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) return false;
         if (!manager.areNotificationsEnabled()) return false;
-        NotificationChannel legacy = manager.getNotificationChannel(ReminderChannelPolicy.LEGACY_ID);
-        ReminderChannelPolicy.Plan plan = ReminderChannelPolicy.select(
-                legacy == null ? null : legacy.getImportance(),
-                legacy != null && Build.VERSION.SDK_INT >= 29 && legacy.hasUserSetImportance(),
-                legacy != null && legacy.shouldVibrate(),
-                manager.getNotificationChannel(ReminderChannelPolicy.HEADS_UP_ID) != null);
+        ReminderChannelPolicy.Plan plan = ReminderChannels.plan(manager);
         if (plan.channelId == null) return false;
-        if (plan.createChannel) {
-            NotificationChannel created = new NotificationChannel(plan.channelId, "成熟提醒·横幅", NotificationManager.IMPORTANCE_HIGH);
-            created.setDescription("农作物成熟时请求横幅提醒，无声音；短振动沿用原设置");
-            created.setSound(null, null);
-            if (plan.vibrate) created.setVibrationPattern(new long[]{0, 200});
-            created.enableVibration(plan.vibrate);
-            manager.createNotificationChannel(created);
-        }
+        ReminderChannels.createIfNeeded(manager, plan);
         NotificationChannel channel = manager.getNotificationChannel(plan.channelId);
         if (channel == null || channel.getImportance() == NotificationManager.IMPORTANCE_NONE) return false;
         Intent launch = context.getPackageManager().getLaunchIntentForPackage("com.tencent.mm");
