@@ -6,11 +6,29 @@ import java.util.Calendar;
 import static org.junit.Assert.*;
 
 public class ReminderImagePresentationTest {
-    @Test public void fitsCompleteWideImageInsideBothLimitsWithoutCropping() {
-        int[] size=ReminderImagePresentation.fit(434,188,280,122);
-        assertArrayEquals(new int[]{280,121},size);
-        assertArrayEquals(new int[]{244,105},ReminderImagePresentation.fit(434,188,244,122));
-        assertArrayEquals(new int[]{0,0},ReminderImagePresentation.fit(0,188,280,122));
+    @Test public void fitsCompletePlateToCardWidthWithoutOldWidthOrHeightCaps() {
+        assertArrayEquals(new int[]{244,111},ReminderImagePresentation.fitCard(434,188,244,8,8));
+        assertArrayEquals(new int[]{336,151},ReminderImagePresentation.fitCard(434,188,336,8,8));
+        assertArrayEquals(new int[]{0,0},ReminderImagePresentation.fitCard(0,188,336,8,8));
+    }
+
+    @Test public void widerAndNarrowerLayoutsPreserveRatioAtEachDisplayDensity() {
+        for(int density:new int[]{1,2,3}) for(int width:new int[]{244,284,336,500}) {
+            int[] size=ReminderImagePresentation.fitCard(434,188,width*density,8*density,8*density);
+            assertEquals(width*density,size[0]);
+            double expected=(double)188*(size[0]-8*density)/434;
+            assertTrue(size[1]-8*density>=expected && size[1]-8*density<expected+1);
+        }
+        int[] wide=ReminderImagePresentation.fitCard(434,188,1008,24,24);
+        int[] narrow=ReminderImagePresentation.fitCard(434,188,732,24,24);
+        assertTrue(wide[0]>narrow[0]); assertTrue(wide[1]>narrow[1]);
+    }
+
+    @Test public void tinyInvalidAndOverflowDimensionsDoNotProduceNegativeLayoutSizes() {
+        assertArrayEquals(new int[]{0,0},ReminderImagePresentation.fitCard(434,188,8,8,8));
+        assertArrayEquals(new int[]{0,0},ReminderImagePresentation.fitCard(434,188,-1,0,0));
+        assertArrayEquals(new int[]{1,1},ReminderImagePresentation.fitCard(434,188,1,0,0));
+        assertArrayEquals(new int[]{0,0},ReminderImagePresentation.fitCard(1,Integer.MAX_VALUE,Integer.MAX_VALUE,0,0));
     }
 
     @Test public void fullPlateAndLegacyPortraitHaveDistinctCoalescingAndStaleBindingKeys() {

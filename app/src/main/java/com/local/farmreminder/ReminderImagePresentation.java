@@ -35,10 +35,13 @@ final class ReminderImagePresentation {
         if (first.startsWith("1. ")) first = first.substring(3);
         return records.size() + "条提醒 · " + first;
     }
-    static int[] fit(int width, int height, int maxWidth, int maxHeight) {
-        if (width <= 0 || height <= 0 || maxWidth <= 0 || maxHeight <= 0) return new int[]{0, 0};
-        double scale = Math.min((double) maxWidth / width, (double) maxHeight / height);
-        return new int[]{Math.max(1, (int) Math.floor(width * scale)), Math.max(1, (int) Math.floor(height * scale))};
+    static int[] fitCard(int width, int height, int availableWidth, int insetX, int insetY) {
+        if (width <= 0 || height <= 0 || insetX < 0 || insetY < 0 || availableWidth <= insetX)
+            return new int[]{0, 0};
+        // Display resampling is allowed; this changes only view dimensions, never stored bitmap detail.
+        double contentHeight = Math.max(1, Math.ceil((double) height * (availableWidth - insetX) / width));
+        if (contentHeight + insetY > Integer.MAX_VALUE) return new int[]{0, 0};
+        return new int[]{availableWidth, (int) contentHeight + insetY};
     }
     private ReminderImagePresentation() { }
 }

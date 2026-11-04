@@ -70,9 +70,9 @@ public class NameplateLocatorTest {
     }
 
     @Test public void missingRightOrBottomBorderAndOcclusionAreNotBlindlyExpanded() {
-        int[] right=scene(0,0,0); rect(right,W,420,164,500,310,WOOD);
+        int[] right=scene(0,0,0); rect(right,W,420,164,700,310,WOOD); // No complete right edge within the bounded search.
         assertNull(NameplateLocator.locatePlate(right,W,H,FRAME));
-        int[] bottom=scene(0,0,0); rect(bottom,W,200,290,442,350,WOOD);
+        int[] bottom=scene(0,0,0); rect(bottom,W,200,290,442,500,WOOD); // No complete bottom edge within the bounded search.
         assertNull(NameplateLocator.locatePlate(bottom,W,H,FRAME));
         int[] occluded=scene(0,0,0); rect(occluded,W,200,160,445,300,0xff222222);
         assertNull(NameplateLocator.locatePlate(occluded,W,H,FRAME));
@@ -95,5 +95,48 @@ public class NameplateLocatorTest {
         for(int y=0;y<H;y++) System.arraycopy(p,y*W,narrow,y*430,430);
         assertNull(NameplateLocator.locatePlate(narrow,430,H,FRAME));
         assertNull(NameplateLocator.locatePlate(Arrays.copyOf(p,W*320),W,320,FRAME));
+    }
+
+    private static int[] lowGreenScene(int dx,int dy,int top) {
+        int[] p=scene(dx,dy,top);
+        rect(p,W,235+dx,237+dy+top,420+dx,280+dy+top,WOOD);
+        // Synthetic lower-field digit-like strokes: geometry/contrast, no user text or private pixels.
+        for(int x=245;x<412;x+=15) {
+            rect(p,W,x+dx,244+dy+top,x+dx+4,274+dy+top,0xfffbefd4);
+            rect(p,W,x+dx+4,244+dy+top,x+dx+10,248+dy+top,0xff503525);
+        }
+        rect(p,W,60+dx,333+dy+top,140+dx,430+dy+top,WOOD); // Separate next control must never join the plate.
+        return p;
+    }
+
+    @Test public void completeLowGreenPanelSurvivesCoarsePortraitSeedWithoutChangingItsSemantics() {
+        int[] p=lowGreenScene(0,0,0);
+        AvatarLocator.Bounds a=AvatarLocator.locate(p,W,H,home(0)); assertNotNull(a);
+        NameplateLocator.Bounds b=NameplateLocator.locate(p,W,H,home(0)); assertNotNull(b);
+        assertTrue(b.left<=23 && b.top<=145 && b.right>442 && b.bottom>316 && b.bottom<=333);
+        AvatarLocator.Bounds after=AvatarLocator.locate(p,W,H,home(0));
+        assertEquals(a.left,after.left);assertEquals(a.top,after.top);assertEquals(a.right,after.right);assertEquals(a.bottom,after.bottom);
+        // Numeric coarse seed from the failed runtime frame; whole plate cannot be inferred by fixed D padding.
+        NameplateLocator.Bounds coarse=NameplateLocator.locatePlate(p,W,H,new AvatarLocator.Bounds(64,172,192,300));
+        assertNotNull(coarse); assertTrue(coarse.left<=23 && coarse.right>442 && coarse.bottom<=333);
+    }
+
+    @Test public void lowGreenPanelWorksAtHalfScaleAndTranslatedBlackBandOffsets() {
+        for(int top:new int[]{0,24}) {
+            int[] p=lowGreenScene(12,12,top);
+            NameplateLocator.Bounds full=NameplateLocator.locate(p,W,H+2*top,home(top));assertNotNull(full);
+            assertTrue(full.left<=35 && full.top<=157+top && full.right>454 && full.bottom<=345+top);
+            int w=W/2,h=(H+2*top)/2; int[] half=new int[w*h];
+            for(int y=0;y<h;y++)for(int x=0;x<w;x++)half[y*w+x]=p[2*y*W+2*x];
+            NameplateLocator.Bounds b=NameplateLocator.locate(half,w,h,Collections.singletonList(
+                    new OcrLine("回家",539,(2246+top)/2,582,(2290+top)/2)));
+            assertNotNull(b); assertTrue(b.right>227 && b.bottom<=(345+top)/2);
+        }
+    }
+
+    @Test public void lowGreenStillRequiresSceneAndActualFieldStructure() {
+        assertNull(NameplateLocator.locate(lowGreenScene(0,0,0),W,H,Collections.emptyList()));
+        int[] p=scene(0,0,0);rect(p,W,200,232,442,290,WOOD);
+        assertNull(NameplateLocator.locate(p,W,H,home(0))); // Plain wood cannot stand in for an experience field.
     }
 }

@@ -877,7 +877,7 @@ public class MainActivity extends Activity {
             plate.setPadding(dp(4), dp(4), dp(4), dp(4));
             plate.setBackground(background(0xFFF0F3EB, 12, 0xFFE0E6DA));
             plate.setClipToOutline(false);
-            row.addView(plate, spaced(-1, dp(122), contentTop));
+            row.addView(plate, spaced(-1, dp(80), contentTop)); // Loading placeholder; decoded aspect determines final height.
         }
         LinearLayout heading = new LinearLayout(this);
         heading.setGravity(android.view.Gravity.CENTER_VERTICAL);

@@ -170,14 +170,12 @@ final class AvatarViewBinder {
     private void fitPlate(ImageView image, Bitmap bitmap) {
         View parent = image.getParent() instanceof View ? (View) image.getParent() : null;
         if (parent == null || parent.getWidth() <= 0) return;
-        float density = image.getResources().getDisplayMetrics().density;
         int available = parent.getWidth() - parent.getPaddingLeft() - parent.getPaddingRight();
         int insetX = image.getPaddingLeft() + image.getPaddingRight(), insetY = image.getPaddingTop() + image.getPaddingBottom();
-        int[] size = ReminderImagePresentation.fit(bitmap.getWidth(), bitmap.getHeight(),
-                Math.min(available, Math.round(280 * density)) - insetX, Math.round(122 * density) - insetY);
+        int[] size = ReminderImagePresentation.fitCard(bitmap.getWidth(), bitmap.getHeight(), available, insetX, insetY);
         android.view.ViewGroup.LayoutParams lp = image.getLayoutParams();
-        if (size[0] > 0 && (lp.width != size[0] + insetX || lp.height != size[1] + insetY)) {
-            lp.width = size[0] + insetX; lp.height = size[1] + insetY; image.setLayoutParams(lp);
+        if (size[0] > 0 && (lp.width != size[0] || lp.height != size[1])) {
+            lp.width = size[0]; lp.height = size[1]; image.setLayoutParams(lp);
         }
     }
 
