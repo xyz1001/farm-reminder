@@ -22,7 +22,7 @@ public class MonitorPresentationTest {
 
     @Test public void waitingKeepsStopAndShowsSpecificDependencyWithoutLocalTimeout() {
         MonitorCoordinator.Reason[] reasons = {ACCESSIBILITY, SOURCE_PERMISSION, SHIZUKU, LOCKED, NOT_TARGET, BUSY};
-        String[] words = {"截图服务", "来源权限", "Shizuku", "解锁", "目标农场", "仍在处理"};
+        String[] words = {"截图服务", "授权", "Shizuku", "解锁", "目标农场", "仍在处理"};
         for (int i = 0; i < reasons.length; i++) {
             MonitorPresentation ui = view(WAITING, reasons[i], true, true, false);
             assertEquals("等待监测", ui.title); assertTrue(ui.detail.contains(words[i]));
@@ -73,10 +73,12 @@ public class MonitorPresentationTest {
         assertTrue(ui.showStop); assertEquals("状态保存失败", ui.title);
         assertFalse(ui.modeEditable);
         assertTrue(ui.detail.contains("暂无法确认"));
+        assertTrue(ui.detail.contains("当前未监测"));
+        assertFalse(view(ERROR, STORAGE_ERROR, true, true, true).detail.contains("当前未监测"));
     }
 
     @Test public void queuedAcceptanceDoesNotClaimCaptureHasStarted() {
-        assertEquals("已记录监测请求，请查看当前状态。",
+        assertEquals("",
                 MonitorPresentation.startFeedback(MonitorCoordinator.RequestCode.ACCEPTED));
         assertTrue(MonitorPresentation.startFeedback(MonitorCoordinator.RequestCode.STORAGE_FAILED).contains("未确认启动"));
         assertFalse(MonitorPresentation.startFeedback(MonitorCoordinator.RequestCode.ALREADY_ACTIVE).contains("已开始"));
@@ -105,5 +107,21 @@ public class MonitorPresentationTest {
     @Test public void stoppedServiceStillExitingDoesNotLookReadyOrRunning() {
         MonitorPresentation ui = view(STOPPED, USER_STOP, false, true, false);
         assertEquals("正在停止", ui.title); assertFalse(ui.showStart); assertTrue(ui.showStop); assertFalse(ui.modeEditable);
+    }
+
+    @Test public void normalStatesNeedNoPermanentImplementationExplanation() {
+        assertEquals("", view(RUNNING, NONE, true, true, true).detail);
+        assertEquals("", view(STARTING, NONE, true, false, false).detail);
+        assertEquals("", view(STOPPED, USER_STOP, false, false, false).detail);
+        assertEquals("", view(NOT_ENROLLED, NONE, false, false, false).detail);
+        assertFalse(view(ERROR, STORAGE_ERROR, false, false, false).detail.isEmpty());
+    }
+
+    @Test public void restoreExplanationAppearsOnlyBeforeFirstEnrollment() {
+        assertTrue(MonitorPresentation.showRestoreHint(false, NOT_ENROLLED, true));
+        assertFalse(MonitorPresentation.showRestoreHint(true, STOPPED, true));
+        assertFalse(MonitorPresentation.showRestoreHint(true, RUNNING, true));
+        assertFalse(MonitorPresentation.showRestoreHint(false, ERROR, true));
+        assertFalse(MonitorPresentation.showRestoreHint(false, NOT_ENROLLED, false));
     }
 }

@@ -19,7 +19,7 @@ final class ReminderListGroups {
     String title() { return "待提醒 " + pending.size() + " 组"; }
 
     static String summary(ReminderGrouping.Group group) {
-        return "好友 · " + group.reminders.size() + " 条提醒";
+        return group.reminders.size() + " 条提醒";
     }
 
     static String avatarRef(ReminderGrouping.Group group) {
@@ -48,9 +48,4 @@ final class ReminderListGroups {
         out.append(text.length()).append(':').append(text).append('|');
     }
 
-    static String lead(Reminder reminder) {
-        long seconds = Math.max(0, (reminder.matureAt - reminder.triggerAt) / 1000);
-        if (seconds == 0) return "成熟时提醒";
-        return "提前 " + (seconds % 60 == 0 ? seconds / 60 + " 分钟" : seconds + " 秒") + "提醒";
-    }
 }

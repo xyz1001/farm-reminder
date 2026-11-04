@@ -47,7 +47,7 @@ public class ReminderListGroupsTest {
         ReminderListGroups ui = new ReminderListGroups(records);
         assertEquals(Arrays.asList(a, b), ui.pending.get(0).reminders);
         assertEquals(Collections.singletonList(old), ui.history);
-        assertEquals("好友 · 2 条提醒", ReminderListGroups.summary(ui.pending.get(0)));
+        assertEquals("2 条提醒", ReminderListGroups.summary(ui.pending.get(0)));
         assertEquals(3, records.size());
         assertTrue(old.fired);
         assertFalse(a.fired);
@@ -60,7 +60,7 @@ public class ReminderListGroupsTest {
         Reminder d = record("d", 600000, "丙", false);
         ReminderListGroups ui = new ReminderListGroups(Arrays.asList(d, b, c, a));
         assertEquals(Arrays.asList(a, b, c, d), ui.pending.get(0).reminders);
-        assertEquals("好友 · 4 条提醒", ReminderListGroups.summary(ui.pending.get(0)));
+        assertEquals("4 条提醒", ReminderListGroups.summary(ui.pending.get(0)));
         assertEquals("待提醒 1 组", ui.title());
     }
 
@@ -77,17 +77,14 @@ public class ReminderListGroupsTest {
         assertEquals(2, records.size());
     }
 
-    @Test public void emptySummaryNeverNeedsUsernamesAndLeadIsReadable() {
+    @Test public void emptySummaryNeverNeedsUsernames() {
         ReminderListGroups empty = new ReminderListGroups(Collections.emptyList());
         assertEquals("待提醒 0 组", empty.title());
         assertTrue(empty.pending.isEmpty()); assertTrue(empty.history.isEmpty());
         Reminder a = record("a", 600000, null, false);
         Reminder b = record("b", 600000, "  ", false);
         ReminderListGroups ui = new ReminderListGroups(Arrays.asList(a, b));
-        assertEquals("好友 · 2 条提醒", ReminderListGroups.summary(ui.pending.get(0)));
-        assertEquals("提前 1 分钟提醒", ReminderListGroups.lead(a));
-        a.triggerAt = a.matureAt;
-        assertEquals("成熟时提醒", ReminderListGroups.lead(a));
+        assertEquals("2 条提醒", ReminderListGroups.summary(ui.pending.get(0)));
     }
 
     @Test public void photoSelectionUsesEarliestValidPendingWithinGroupOnly() {
@@ -102,7 +99,7 @@ public class ReminderListGroupsTest {
         ReminderGrouping.Group group = new ReminderGrouping.Group(Arrays.asList(c, fired, b, invalid));
         assertEquals(b.avatarRef, ReminderListGroups.avatarRef(group));
         assertEquals("", ReminderListGroups.avatarRef(new ReminderGrouping.Group(Arrays.asList(fired, invalid))));
-        assertEquals("好友 · 4 条提醒", ReminderListGroups.summary(group));
+        assertEquals("4 条提醒", ReminderListGroups.summary(group));
     }
 
     @Test public void attachingOrChangingPhotoChangesSignatureButLegacyNicknameDoesNot() {
@@ -142,7 +139,7 @@ public class ReminderListGroupsTest {
         String signature = ReminderListGroups.signature(records, 0);
         a.crop = "旧作物一"; b.crop = "旧作物二"; c.crop = "";
         ReminderListGroups ui = new ReminderListGroups(records);
-        assertEquals("好友 · 3 条提醒", ReminderListGroups.summary(ui.pending.get(0)));
+        assertEquals("3 条提醒", ReminderListGroups.summary(ui.pending.get(0)));
         assertEquals(signature, ReminderListGroups.signature(records, 0));
         assertEquals(a.avatarRef, ReminderListGroups.avatarRef(ui.pending.get(0)));
         assertEquals("旧作物一", a.crop); // Presentation never rewrites compatible historical data.
