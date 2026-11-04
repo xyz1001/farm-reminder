@@ -31,6 +31,65 @@ public class ReminderImagePresentationTest {
         assertArrayEquals(new int[]{0,0},ReminderImagePresentation.fitCard(1,Integer.MAX_VALUE,Integer.MAX_VALUE,0,0));
     }
 
+    @Test public void absentOrFailedPixelsAlwaysKeepTheSameWidePlaceholder() {
+        int[] expected = {336,151};
+        assertArrayEquals(expected, ReminderImagePresentation.listSlot(0,0,336,8,8));
+        assertArrayEquals(expected, ReminderImagePresentation.listSlot(-1,-1,336,8,8));
+        assertArrayEquals(expected, ReminderImagePresentation.listSlot(434,0,336,8,8));
+        assertArrayEquals(expected, ReminderImagePresentation.listSlot(0,188,336,8,8));
+    }
+
+    @Test public void oldAvatarOnlyAndEmptyRecordsDoNotSelectAPortraitForTheListSlot() {
+        Reminder empty=record("empty",1000), old=record("old",1001), invalid=record("invalid",1002);
+        old.avatarRef="a".repeat(64); invalid.plateRef="../invalid";
+        for (Reminder r : Arrays.asList(empty,old,invalid)) {
+            assertEquals("", ReminderImagePresentation.plateRef(Arrays.asList(r)));
+            assertArrayEquals(new int[]{336,151}, ReminderImagePresentation.listSlot(0,0,336,8,8));
+        }
+        old.fired=true;
+        assertEquals("", ReminderImagePresentation.plateRef(Arrays.asList(old)));
+    }
+
+    @Test public void placeholderRespondsToFirstMeasureResizeAndDensityWithoutNegativeDimensions() {
+        assertArrayEquals(new int[]{0,0},ReminderImagePresentation.listSlot(0,0,0,8,8));
+        for (int density : new int[]{1,2,3}) for (int width : new int[]{244,336,640}) {
+            int[] size=ReminderImagePresentation.listSlot(0,0,width*density,8*density,8*density);
+            assertEquals(width*density,size[0]);
+            double expected=(width-8)*density/2.3;
+            assertTrue(size[1]-8*density>=expected-0.000001);
+            assertTrue(size[1]-8*density<expected+1.000001);
+            assertTrue(size[0]>size[1]);
+        }
+        assertArrayEquals(new int[]{0,0},ReminderImagePresentation.listSlot(0,0,8,8,8));
+        assertArrayEquals(new int[]{1,1},ReminderImagePresentation.listSlot(0,0,1,0,0));
+    }
+
+    @Test public void loadedAndMissingSlotsHaveIdenticalFramesRegardlessOfBitmapAspect() {
+        for (int density : new int[]{1,2,3}) for (int width : new int[]{1,8,244,336,640}) {
+            int available=width*density, inset=8*density;
+            int[] empty=ReminderImagePresentation.listSlot(0,0,available,inset,inset);
+            for (int[] bitmap : new int[][]{{434,188},{443,190},{900,300},{60,60},{100,400}}) {
+                assertArrayEquals(empty,
+                        ReminderImagePresentation.listSlot(bitmap[0],bitmap[1],available,inset,inset));
+            }
+        }
+        assertArrayEquals(new int[]{0,0},ReminderImagePresentation.listSlot(439,179,0,8,8));
+        ReminderImagePresentation.listSlot(900,300,640,8,8);
+        assertArrayEquals(new int[]{336,151},ReminderImagePresentation.listSlot(0,0,336,8,8));
+    }
+
+    @Test public void stalePlateCompletionDoesNotOwnAReboundEmptySlot() {
+        AvatarBindingPolicy policy=new AvatarBindingPolicy(4);
+        String oldKey=ReminderImagePresentation.key(ReminderImagePresentation.Kind.PLATE,"a".repeat(64));
+        long old=policy.bind(oldKey); policy.request(old,oldKey);
+        String emptyKey=ReminderImagePresentation.key(ReminderImagePresentation.Kind.PLATE,"");
+        long fresh=policy.bind(emptyKey);
+        assertFalse(policy.complete(oldKey).contains(fresh));
+        assertFalse(policy.current(fresh,oldKey)); assertTrue(policy.current(fresh,emptyKey));
+        policy.clearBindings();
+        assertFalse(policy.current(fresh,emptyKey));
+    }
+
     @Test public void fullPlateAndLegacyPortraitHaveDistinctCoalescingAndStaleBindingKeys() {
         String ref="a".repeat(64);
         String portrait=ReminderImagePresentation.key(ReminderImagePresentation.Kind.PORTRAIT,ref);

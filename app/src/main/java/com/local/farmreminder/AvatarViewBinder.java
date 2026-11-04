@@ -2,7 +2,12 @@ package com.local.farmreminder;
 
 import android.content.Context;
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.ColorFilter;
+import android.graphics.Paint;
+import android.graphics.PixelFormat;
 import android.graphics.Rect;
+import android.graphics.drawable.Drawable;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.View;
@@ -20,7 +25,7 @@ import java.util.concurrent.TimeUnit;
 /** Visible-row-only loader. Owns loaded bitmaps; never decodes or builds asset paths on the UI thread. */
 final class AvatarViewBinder {
     // Four cached + four pending full plates are at most 8 MiB of owned ARGB pixels, before GC.
-    private static final int MAX_PIXELS = 65536, PLATE_PIXELS = ReminderImagePresentation.PLATE_MAX_PIXELS,
+    private static final int PLATE_PIXELS = ReminderImagePresentation.PLATE_MAX_PIXELS,
             CACHE_SIZE = ReminderImagePresentation.CACHE_ENTRIES, VISIBLE_LIMIT = CACHE_SIZE,
             REQUEST_LIMIT = ReminderImagePresentation.REQUEST_LIMIT;
     private final Context context;
@@ -49,12 +54,10 @@ final class AvatarViewBinder {
         final long token;
         final String ref;
         final String key;
-        final ReminderImagePresentation.Kind kind;
-        final Runnable loaded, missing;
         boolean showing;
-        boolean resolved;
-        Binding(long token, String ref, String key, ReminderImagePresentation.Kind kind, Runnable loaded, Runnable missing) {
-            this.token = token; this.ref = ref; this.key = key; this.kind = kind; this.loaded = loaded; this.missing = missing;
+        int width, height;
+        Binding(long token, String ref, String key) {
+            this.token = token; this.ref = ref; this.key = key;
         }
     }
 
@@ -64,19 +67,11 @@ final class AvatarViewBinder {
         if (host.isAttachedToWindow()) watch();
     }
 
-    void bind(ImageView image, String ref) {
-        bind(image, ref, ReminderImagePresentation.Kind.PORTRAIT, null, null);
-    }
-
-    void bindPlate(ImageView image, String ref, Runnable loaded, Runnable missing) {
-        bind(image, ref, ReminderImagePresentation.Kind.PLATE, loaded, missing);
-    }
-
-    private void bind(ImageView image, String ref, ReminderImagePresentation.Kind kind, Runnable loaded, Runnable missing) {
+    void bindPlate(ImageView image, String ref) {
         if (closed) return;
-        String safe = kind == ReminderImagePresentation.Kind.PLATE ? NameplateRefPolicy.normalize(ref) : AvatarRefPolicy.normalize(ref);
-        String key = ReminderImagePresentation.key(kind, safe);
-        bindings.put(image, new Binding(policy.bind(key), safe, key, kind, loaded, missing));
+        String safe = NameplateRefPolicy.normalize(ref);
+        String key = ReminderImagePresentation.key(ReminderImagePresentation.Kind.PLATE, safe);
+        bindings.put(image, new Binding(policy.bind(key), safe, key));
         placeholder(image); schedule();
     }
 
@@ -107,6 +102,8 @@ final class AvatarViewBinder {
         int shown = 0;
         for (Map.Entry<ImageView, Binding> item : bindings.entrySet()) {
             ImageView image = item.getKey(); Binding binding = item.getValue();
+            // Empty refs also participate in layout, including first measure and orientation changes.
+            fitSlot(image, binding);
             if (binding.ref.isEmpty() || !visible(image) || shown++ >= VISIBLE_LIMIT) {
                 if (binding.showing) { placeholder(image); binding.showing = false; }
                 continue;
@@ -120,12 +117,10 @@ final class AvatarViewBinder {
             if (decision != AvatarBindingPolicy.Request.START) continue;
             final String ref = binding.ref;
             final String key = binding.key;
-            final ReminderImagePresentation.Kind kind = binding.kind;
             try {
                 worker.execute(() -> {
                     Bitmap loaded;
-                    try { loaded = kind == ReminderImagePresentation.Kind.PLATE
-                            ? NameplateStore.load(context, ref, PLATE_PIXELS) : AvatarStore.load(context, ref, MAX_PIXELS); }
+                    try { loaded = NameplateStore.load(context, ref, PLATE_PIXELS); }
                     catch (RuntimeException | OutOfMemoryError ignored) { loaded = null; }
                     final Bitmap result = loaded;
                     if (closed) { discardUnused(result); return; }
@@ -154,25 +149,25 @@ final class AvatarViewBinder {
         if (bitmap == null || bitmap.isRecycled()) {
             if (binding.showing) placeholder(image);
             binding.showing = false;
-            if (!binding.resolved && binding.missing != null) binding.missing.run();
-            binding.resolved = true; return;
+            binding.width = binding.height = 0;
+            fitSlot(image, binding);
+            return;
         }
-        if (binding.kind == ReminderImagePresentation.Kind.PLATE) fitPlate(image, bitmap);
+        binding.width = bitmap.getWidth(); binding.height = bitmap.getHeight();
+        fitSlot(image, binding);
         if (binding.showing) return;
         image.clearColorFilter();
         image.setImageBitmap(bitmap);
-        image.setContentDescription(binding.kind == ReminderImagePresentation.Kind.PLATE ? "好友完整铭牌" : "好友头像");
+        image.setContentDescription("好友完整铭牌");
         binding.showing = true;
-        binding.resolved = true;
-        if (binding.loaded != null) binding.loaded.run();
     }
 
-    private void fitPlate(ImageView image, Bitmap bitmap) {
+    private void fitSlot(ImageView image, Binding binding) {
         View parent = image.getParent() instanceof View ? (View) image.getParent() : null;
         if (parent == null || parent.getWidth() <= 0) return;
         int available = parent.getWidth() - parent.getPaddingLeft() - parent.getPaddingRight();
         int insetX = image.getPaddingLeft() + image.getPaddingRight(), insetY = image.getPaddingTop() + image.getPaddingBottom();
-        int[] size = ReminderImagePresentation.fitCard(bitmap.getWidth(), bitmap.getHeight(), available, insetX, insetY);
+        int[] size = ReminderImagePresentation.listSlot(binding.width, binding.height, available, insetX, insetY);
         android.view.ViewGroup.LayoutParams lp = image.getLayoutParams();
         if (size[0] > 0 && (lp.width != size[0] || lp.height != size[1])) {
             lp.width = size[0]; lp.height = size[1]; image.setLayoutParams(lp);
@@ -191,9 +186,25 @@ final class AvatarViewBinder {
     }
 
     private static void placeholder(ImageView image) {
-        image.setImageResource(android.R.drawable.ic_menu_gallery);
-        image.setColorFilter(0xFF89968A);
-        image.setContentDescription("好友图片未定位");
+        image.clearColorFilter();
+        image.setImageDrawable(new PlatePlaceholder(12 * image.getResources().getDisplayMetrics().scaledDensity));
+        image.setContentDescription("暂无铭牌");
+    }
+
+    /** No intrinsic square icon: draw quiet text at the actual wide slot's center. */
+    private static final class PlatePlaceholder extends Drawable {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        PlatePlaceholder(float textSize) {
+            paint.setColor(0xFF657367); paint.setTextSize(textSize); paint.setTextAlign(Paint.Align.CENTER);
+        }
+        @Override public void draw(Canvas canvas) {
+            Rect bounds = getBounds();
+            canvas.drawText("暂无铭牌", bounds.exactCenterX(),
+                    bounds.exactCenterY() - (paint.ascent() + paint.descent()) / 2, paint);
+        }
+        @Override public void setAlpha(int alpha) { paint.setAlpha(alpha); invalidateSelf(); }
+        @Override public void setColorFilter(ColorFilter filter) { paint.setColorFilter(filter); invalidateSelf(); }
+        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
     }
 
     private static void discardUnused(Bitmap bitmap) {

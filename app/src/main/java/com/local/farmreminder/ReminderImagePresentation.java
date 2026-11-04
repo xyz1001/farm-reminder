@@ -43,5 +43,9 @@ final class ReminderImagePresentation {
         if (contentHeight + insetY > Integer.MAX_VALUE) return new int[]{0, 0};
         return new int[]{availableWidth, (int) contentHeight + insetY};
     }
+    /** Every list state uses the same 2.3:1 frame; FIT_CENTER fits the bitmap inside it. */
+    static int[] listSlot(int bitmapWidth, int bitmapHeight, int availableWidth, int insetX, int insetY) {
+        return fitCard(230, 100, availableWidth, insetX, insetY);
+    }
     private ReminderImagePresentation() { }
 }

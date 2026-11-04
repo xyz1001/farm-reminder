@@ -816,7 +816,7 @@ public class MainActivity extends Activity {
                 continue;
             }
             if (group.due(now)) addText(row, "等待提交通知", 12, GREEN, true, 0);
-            renderAvatarTime(row, group.anchor(), ReminderListGroups.avatarRef(group), ReminderImagePresentation.plateRef(group.reminders),
+            renderAvatarTime(row, group.anchor(), ReminderImagePresentation.plateRef(group.reminders),
                     ReminderListGroups.summary(group), "最早成熟");
             LinearLayout details = column();
             Button toggle = button(row, "", false, 10, () -> {});
@@ -857,7 +857,7 @@ public class MainActivity extends Activity {
     private void renderReminder(LinearLayout row, Reminder r, SimpleDateFormat date, long now) {
         if (r.fired || r.triggerAt <= now) addText(row, r.fired ? "已提交通知" : "等待提交通知", 12,
                 r.fired ? MUTED : GREEN, true, 0);
-        renderAvatarTime(row, r, r.avatarRef, r.plateRef, "", "成熟");
+        renderAvatarTime(row, r, r.plateRef, "", "成熟");
         addText(row, ScreenPresentation.schedule(r.matureAt, r.triggerAt), 12, MUTED, false, 5);
         Button delete = button(row, "删除", false, 10, () -> new AlertDialog.Builder(this)
                 .setTitle("删除提醒？").setMessage("成熟时间：" + date.format(new Date(r.matureAt))
@@ -868,43 +868,26 @@ public class MainActivity extends Activity {
         delete.setContentDescription("删除 " + date.format(new Date(r.matureAt)) + " 成熟的提醒");
     }
 
-    private void renderAvatarTime(LinearLayout row, Reminder reminder, String avatarRef, String plateRef, String label, String timeLabel) {
+    private void renderAvatarTime(LinearLayout row, Reminder reminder, String plateRef, String label, String timeLabel) {
         int contentTop = row.getChildCount() == 0 ? 0 : 10;
-        ImageView plate = null;
-        if (!NameplateRefPolicy.normalize(plateRef).isEmpty()) {
-            plate = new ImageView(this);
-            plate.setScaleType(ImageView.ScaleType.FIT_CENTER);
-            plate.setPadding(dp(4), dp(4), dp(4), dp(4));
-            plate.setBackground(background(0xFFF0F3EB, 12, 0xFFE0E6DA));
-            plate.setClipToOutline(false);
-            row.addView(plate, spaced(-1, dp(80), contentTop)); // Loading placeholder; decoded aspect determines final height.
-        }
+        ImageView plate = new ImageView(this);
+        plate.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        plate.setPadding(dp(4), dp(4), dp(4), dp(4));
+        plate.setBackground(background(0xFFF0F3EB, 12, 0xFFE0E6DA));
+        plate.setClipToOutline(false);
+        row.addView(plate, spaced(-1, dp(80), contentTop)); // First layout resolves the responsive placeholder aspect.
         LinearLayout heading = new LinearLayout(this);
         heading.setGravity(android.view.Gravity.CENTER_VERTICAL);
-        row.addView(heading, spaced(-1, -2, plate == null ? contentTop : 10));
-        ImageView image = new ImageView(this);
-        image.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        image.setPadding(dp(5), dp(5), dp(5), dp(5));
-        image.setBackground(background(0xFFF0F3EB, 12, 0xFFE0E6DA));
-        image.setClipToOutline(true);
-        heading.addView(image, new LinearLayout.LayoutParams(dp(60), dp(60)));
-        image.setVisibility(plate == null ? View.VISIBLE : View.GONE);
+        row.addView(heading, spaced(-1, -2, 10));
         LinearLayout words = column();
         LinearLayout.LayoutParams textLayout = new LinearLayout.LayoutParams(0, -2, 1);
-        textLayout.leftMargin = plate == null ? dp(13) : 0; heading.addView(words, textLayout);
+        heading.addView(words, textLayout);
         if (!blank(label)) addText(words, label, 12, MUTED, false, 0);
         addText(words, timeLabel + " " + new SimpleDateFormat("HH:mm:ss", Locale.CHINA)
                 .format(new Date(reminder.matureAt)), 20, INK, true, blank(label) ? 0 : 3);
         addText(words, new SimpleDateFormat("yyyy年M月d日", Locale.CHINA)
                 .format(new Date(reminder.matureAt)), 12, MUTED, false, 3);
-        avatars.bind(image, avatarRef);
-        if (plate != null) {
-            ImageView full = plate;
-            avatars.bindPlate(full, plateRef, () -> image.setVisibility(View.GONE), () -> {
-                full.setVisibility(View.GONE); image.setVisibility(View.VISIBLE);
-                textLayout.leftMargin = dp(13); words.setLayoutParams(textLayout);
-            });
-        }
+        avatars.bindPlate(plate, plateRef);
     }
 
     private boolean canChangeMode() {
