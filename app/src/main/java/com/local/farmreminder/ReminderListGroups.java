@@ -36,7 +36,7 @@ final class ReminderListGroups {
     static String signature(List<Reminder> records, long now) {
         StringBuilder out = new StringBuilder();
         for (Reminder r : records) {
-            append(out, r.id); append(out, r.crop); append(out, r.avatarRef);
+            append(out, r.id); append(out, r.avatarRef);
             out.append(r.matureAt).append('|').append(r.triggerAt).append('|')
                     .append(r.fired).append('|').append(r.triggerAt <= now).append(';');
         }

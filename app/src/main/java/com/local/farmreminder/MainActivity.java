@@ -894,7 +894,6 @@ public class MainActivity extends Activity {
         addText(row, r.fired ? "已提交提醒" : r.triggerAt <= now ? "提醒时间已到 · 待提交" : "待提醒", 12,
                 r.fired ? MUTED : GREEN, true, 0);
         renderAvatarTime(row, r, r.avatarRef, "好友", "成熟");
-        addText(row, "作物：" + (blank(r.crop) ? "未识别" : r.crop), 13, MUTED, false, 5);
         addText(row, ReminderListGroups.lead(r) + " · " + date.format(new Date(r.triggerAt)), 12, MUTED, false, 5);
         button(row, "删除这条提醒", false, 10, () -> new AlertDialog.Builder(this)
                 .setTitle("删除这条提醒？").setMessage("成熟时间：" + date.format(new Date(r.matureAt))

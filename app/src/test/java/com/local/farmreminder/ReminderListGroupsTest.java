@@ -120,7 +120,7 @@ public class ReminderListGroupsTest {
         assertNotEquals(changed, ReminderListGroups.signature(records, r.triggerAt));
     }
 
-    @Test public void signatureIncludesOriginalRowIdentityAndCropUntilPhaseSix() {
+    @Test public void signatureIncludesOriginalRowIdentityButIgnoresLegacyCrop() {
         Reminder r = record("a", 600000, "old", false);
         List<Reminder> records = Collections.singletonList(r);
         String original = ReminderListGroups.signature(records, 0);
@@ -128,6 +128,25 @@ public class ReminderListGroupsTest {
         assertNotEquals(original, ReminderListGroups.signature(records, 0));
         String renamed = ReminderListGroups.signature(records, 0);
         r.crop = "crop";
-        assertNotEquals(renamed, ReminderListGroups.signature(records, 0));
+        assertEquals(renamed, ReminderListGroups.signature(records, 0));
+        r.crop = null;
+        assertEquals(renamed, ReminderListGroups.signature(records, 0));
+    }
+
+    @Test public void mixedLegacyCropsDoNotAffectSummarySignatureOrPhotoSelection() {
+        Reminder a = record("a", 600000, "old", false);
+        Reminder b = record("b", 600001, "old", false);
+        Reminder c = record("c", 600002, "old", false);
+        a.avatarRef = "a".repeat(64);
+        List<Reminder> records = Arrays.asList(a, b, c);
+        String signature = ReminderListGroups.signature(records, 0);
+        a.crop = "旧作物一"; b.crop = "旧作物二"; c.crop = "";
+        ReminderListGroups ui = new ReminderListGroups(records);
+        assertEquals("好友 · 3 条提醒", ReminderListGroups.summary(ui.pending.get(0)));
+        assertEquals(signature, ReminderListGroups.signature(records, 0));
+        assertEquals(a.avatarRef, ReminderListGroups.avatarRef(ui.pending.get(0)));
+        assertEquals("旧作物一", a.crop); // Presentation never rewrites compatible historical data.
+        a.avatarRef = "b".repeat(64);
+        assertNotEquals(signature, ReminderListGroups.signature(records, 0));
     }
 }
