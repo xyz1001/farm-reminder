@@ -33,9 +33,13 @@ final class SetupFlowPolicy {
         return !running && !serviceActive && !startPending;
     }
 
+    static boolean canFinishSetup(Step actual, boolean reviewMode, Step backStep) {
+        return actual == Step.READY && !reviewMode && backStep == null;
+    }
+
     static String pageAfterClosingSetup(Step displayedStep, String currentPage) {
-        // MODE overlays its entry tab; currentPage also survives Activity recreation.
-        return displayedStep == Step.MODE ? currentPage : "home";
+        // Mode review and completed setup return to their entry tab, also after recreation.
+        return displayedStep == Step.MODE || requiredReady(displayedStep) ? currentPage : "home";
     }
 
     private SetupFlowPolicy() {}

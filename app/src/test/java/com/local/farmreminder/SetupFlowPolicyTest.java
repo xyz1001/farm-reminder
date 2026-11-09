@@ -38,6 +38,61 @@ public class SetupFlowPolicyTest {
         assertEquals(MODE, next(false, false, false, false, false, false, false, false));
     }
 
+    @Test public void confirmingReadyModeReturnsToSettingsOnlyAfterLeavingReview() {
+        SetupFlowPolicy.Step actual = next(true, false, true, false, true, true, true, false);
+        assertEquals(READY, actual);
+        assertFalse(SetupFlowPolicy.canFinishSetup(actual, true, null));
+        assertTrue(SetupFlowPolicy.canFinishSetup(actual, false, null));
+        assertEquals("settings", SetupFlowPolicy.pageAfterClosingSetup(actual, "settings"));
+    }
+
+    @Test public void settingsPermissionProgressionCompletesAtSettingsForEitherMode() {
+        assertPermissionProgressionReturnsTo("settings", false);
+        assertPermissionProgressionReturnsTo("settings", true);
+    }
+
+    @Test public void firstRunPermissionProgressionAndHomeReviewCompleteAtHome() {
+        assertEquals(MODE, next(false, false, false, false, false, false, false, false));
+        assertPermissionProgressionReturnsTo("home", false);
+        assertPermissionProgressionReturnsTo("home", true);
+        assertEquals("home", SetupFlowPolicy.pageAfterClosingSetup(READY, "home"));
+    }
+
+    @Test public void pendingRequiredPermissionOrBackStepCannotFinishSetup() {
+        for (SetupFlowPolicy.Step step : new SetupFlowPolicy.Step[]{MODE, SOURCE, SCREENSHOT, WAITING, UNSUPPORTED}) {
+            assertFalse(SetupFlowPolicy.canFinishSetup(step, false, null));
+            assertFalse(SetupFlowPolicy.requiredReady(step));
+        }
+        assertFalse(SetupFlowPolicy.canFinishSetup(READY, false, SOURCE));
+        assertFalse(SetupFlowPolicy.canFinishSetup(READY, false, SCREENSHOT));
+    }
+
+    @Test public void optionalNotificationCompletionAlsoPreservesEntryTab() {
+        assertEquals("settings", SetupFlowPolicy.pageAfterClosingSetup(NOTIFICATIONS, "settings"));
+        assertEquals("home", SetupFlowPolicy.pageAfterClosingSetup(NOTIFICATIONS, "home"));
+    }
+
+    private void assertPermissionProgressionReturnsTo(String origin, boolean shizuku) {
+        SetupFlowPolicy.Step[] steps = {
+                next(true, shizuku, false, false, false, false, false, false),
+                next(true, shizuku, true, true, false, false, false, false),
+                next(true, shizuku, true, true, true, false, false, false),
+                next(true, shizuku, true, true, true, true, false, false),
+                next(true, shizuku, true, true, true, true, true, false)
+        };
+        assertArrayEquals(new SetupFlowPolicy.Step[]{SOURCE, SCREENSHOT, WAITING, NOTIFICATIONS, READY}, steps);
+        for (int i = 0; i < 3; i++) {
+            assertFalse(SetupFlowPolicy.canFinishSetup(steps[i], false, null));
+            assertFalse(SetupFlowPolicy.requiredReady(steps[i]));
+        }
+        // MainActivity normalizes optional NOTIFICATIONS to READY before rendering navigation.
+        for (int i = 3; i < steps.length; i++) {
+            SetupFlowPolicy.Step actual = SetupFlowPolicy.requiredReady(steps[i]) ? READY : steps[i];
+            assertTrue(SetupFlowPolicy.canFinishSetup(actual, false, null));
+            assertEquals(origin, SetupFlowPolicy.pageAfterClosingSetup(actual, origin));
+        }
+    }
+
     @Test public void usageOnlyNeedsUsageAccess() {
         assertEquals(SOURCE, next(true, false, false, true, true, true, true, false));
         assertEquals(READY, next(true, false, true, false, true, true, true, false));

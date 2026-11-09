@@ -368,8 +368,8 @@ public class MainActivity extends Activity {
         }
         lastRequiredReady = ready;
         if (setupVisible && actual == SetupFlowPolicy.Step.MODE && backStep == null) reviewMode = true;
-        if (setupVisible && actual == SetupFlowPolicy.Step.READY && !reviewMode && backStep == null) {
-            setupVisible = false; currentPage = "home";
+        if (setupVisible && SetupFlowPolicy.canFinishSetup(actual, reviewMode, backStep)) {
+            setupVisible = false; currentPage = SetupFlowPolicy.pageAfterClosingSetup(actual, currentPage);
         }
         homePage.setVisibility(!setupVisible && "home".equals(currentPage) ? View.VISIBLE : View.GONE);
         settingsPage.setVisibility(!setupVisible && "settings".equals(currentPage) ? View.VISIBLE : View.GONE);
@@ -456,7 +456,8 @@ public class MainActivity extends Activity {
                 openSettings(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
                 break;
             case WAITING: break; // A refresh is never an automatic trip back into settings.
-            default: setupVisible = false; currentPage = "home"; reviewMode = false;
+            default:
+                setupVisible = false; currentPage = SetupFlowPolicy.pageAfterClosingSetup(step, currentPage); reviewMode = false;
         }
         refresh();
     }
