@@ -30,6 +30,17 @@ public class NotificationBadgePolicyTest {
         assertNull(NotificationBadgePolicy.crop(null, 1000, 1000));
         assertNull(NotificationBadgePolicy.crop(new AvatarLocator.Bounds(0, 0, 1000, 1000), 2000, 2000));
     }
+    @Test public void plateScalingChoosesLargestBoundedFactor() {
+        assertEquals(5, NotificationBadgePolicy.plateScale(92,79));
+        assertEquals(5, NotificationBadgePolicy.plateScale(95,90));
+        assertEquals(4, NotificationBadgePolicy.plateScale(125,100));
+        assertEquals(3, NotificationBadgePolicy.plateScale(150,150));
+        assertEquals(2, NotificationBadgePolicy.plateScale(200,200));
+        assertEquals(1, NotificationBadgePolicy.plateScale(300,300));
+        assertEquals(0, NotificationBadgePolicy.plateScale(501,500));
+        assertEquals(0, NotificationBadgePolicy.plateScale(Integer.MAX_VALUE,Integer.MAX_VALUE));
+        assertEquals(0, NotificationBadgePolicy.plateScale(0,90));
+    }
     @Test public void labelKeepsTypedName() {
         assertEquals("Alice(148级)", NotificationIdentityLabel.of("Alice", null).withLevel(148).text());
         assertEquals("好友(148级)", NotificationIdentityLabel.EMPTY.withLevel(148).text());

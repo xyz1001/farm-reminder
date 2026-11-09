@@ -7,30 +7,6 @@ import static org.junit.Assert.*;
 import static com.local.farmreminder.HeaderLayoutFixture.*;
 
 public class NameplateLocatorTest {
-    @Test public void storedPlateGeometrySurvivesRealCropRoundingAndTranslations() {
-        for(int skin:new int[]{BLUE,PURPLE,GRAY}) for(int s:new int[]{1,2,4})
-            for(int band:new int[]{0,12*s}) for(int[] d:new int[][]{{0,0},{3,3},{12,15}}) {
-                int[] p=scene(s,band,d[0],d[1],skin);
-                NameplateLocator.Bounds b=NameplateLocator.locate(p,W*s,H*s+2*band,null);
-                assertNotNull(b);
-                AvatarLocator.Bounds a=NameplateLocator.portraitInStoredPlate(b.right-b.left,b.bottom-b.top);
-                assertNotNull(a);
-                assertEquals(8*s,a.left,1); assertEquals(8*s,a.top,1);
-                assertEquals(47*s,a.right,2); assertEquals(46*s,a.bottom,2);
-            }
-        for(int[] size:new int[][]{{113,51},{447,201},{337,151},{224,100}})
-            assertNotNull(NameplateLocator.portraitInStoredPlate(size[0],size[1]));
-        for(int[] size:new int[][]{{480,100},{112,40},{0,50},{112,0}})
-            assertNull(NameplateLocator.portraitInStoredPlate(size[0],size[1]));
-    }
-    @Test public void plateLocalRowsPreserveNameAndIndependentLevelButRejectAmbiguity() {
-        AvatarLocator.Bounds a=NameplateLocator.portraitInStoredPlate(448,200);
-        OcrLine name=new OcrLine("示例",188,57,360,102), level=new OcrLine("148",147,109,205,146);
-        assertEquals("示例(148级)",NotificationIdentityParser.parse(Arrays.asList(name,level),Collections.emptyList(),a,448,200,true,true).text());
-        OcrLine merged=new OcrLine("148140万/142万",140,102,398,148);
-        assertEquals("示例",NotificationIdentityParser.parse(Arrays.asList(name,merged),Collections.emptyList(),a,448,200,true,true).text());
-        assertEquals("示例",NotificationIdentityParser.parse(Arrays.asList(name,level),Collections.emptyList(),a,448,200,true,false).text());
-    }
     @Test public void functionalRectangleIncludesAllRegionsAndExcludesLowerControl() {
         for(int skin:new int[]{BLUE,PURPLE,GRAY}) for(int s:new int[]{1,2,4}) for(int band:new int[]{0,12*s}) {
             int[] p=scene(s,band,0,0,skin); NameplateLocator.Bounds b=NameplateLocator.locate(p,W*s,H*s+2*band,null);

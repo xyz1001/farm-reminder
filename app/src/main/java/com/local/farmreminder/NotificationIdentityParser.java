@@ -49,6 +49,19 @@ final class NotificationIdentityParser {
         double d = (double) avatar.right - avatar.left;
         Region name = new Region(avatar.left + .95 * d, avatar.top + .10 * d,
                 avatar.left + 2.65 * d, avatar.top + .50 * d);
+        Region badge = new Region(avatar.left + .68 * d, avatar.top + .44 * d,
+                avatar.left + 1.20 * d, avatar.top + .88 * d);
+        return parseRegions(rows, name, badge, width, height, completeBadge);
+    }
+
+    static NotificationIdentityLabel parsePlateRows(List<TextRow> rows, NameplateIdentityGeometry geometry,
+            int width, int height, boolean completeBadge) {
+        if (geometry == null || width <= 0 || height <= 0) return NotificationIdentityLabel.EMPTY;
+        return parseRegions(rows, geometry.name, geometry.badge, width, height, completeBadge);
+    }
+
+    private static NotificationIdentityLabel parseRegions(List<TextRow> rows, Region name, Region badge,
+            int width, int height, boolean completeBadge) {
         Set<String> names = new HashSet<>();
         if (name.inside(width, height) && rows != null) for (TextRow row : rows) {
             if (row == null || !valid(row.line, width, height) || !name.contains(row.line)) continue;
@@ -56,8 +69,6 @@ final class NotificationIdentityParser {
             if (!safe.isEmpty()) names.add(safe);
         }
         String selected = names.size() == 1 ? names.iterator().next() : null;
-        Region badge = new Region(avatar.left + .68 * d, avatar.top + .44 * d,
-                avatar.left + 1.20 * d, avatar.top + .88 * d);
         Set<Integer> levels = new HashSet<>();
         if (completeBadge && badge.inside(width, height) && rows != null) for (TextRow row : rows) {
             if (row == null || !valid(row.line, width, height) || !badge.intersects(row.line)) continue;
@@ -179,7 +190,7 @@ final class NotificationIdentityParser {
         return a.right > b.left && a.left < b.right && a.bottom > b.top && a.top < b.bottom;
     }
 
-    private static final class Region {
+    static final class Region {
         final double left, top, right, bottom;
         Region(double left, double top, double right, double bottom) {
             this.left = left; this.top = top; this.right = right; this.bottom = bottom;

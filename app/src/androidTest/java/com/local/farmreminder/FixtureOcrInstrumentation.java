@@ -22,9 +22,12 @@ import java.util.concurrent.TimeUnit;
 
 /** Headless asset replay only. No activity, UI automation or screenshot capture. */
 public final class FixtureOcrInstrumentation extends Instrumentation {
+    private static final NotificationOcrLease.Gate BOX_GATE = new NotificationOcrLease.Gate();
     private Bundle args;
     @Override public void onCreate(Bundle arguments) { super.onCreate(arguments); args = arguments; start(); }
     @Override public void onStart() {
+        if ("nameplate-badge-variants".equals(args.getString("mode"))) { runBadgeVariants(); return; }
+        if ("nameplate-boxes".equals(args.getString("mode"))) { runNameplateBoxes(); return; }
         if ("nameplate-identity".equals(args.getString("mode"))) { runNameplateIdentity(); return; }
         if ("pipeline-profile".equals(args.getString("mode"))) {
             PipelineProfileProbe.run(this);
@@ -95,6 +98,214 @@ public final class FixtureOcrInstrumentation extends Instrumentation {
         } catch (Exception e) { code = 1; result.putString("error", e.getClass().getName()); }
         finally { if (recognizer != null) recognizer.close(); if (source != null) source.recycle(); }
         finish(code, result);
+    }
+
+    private static final class VariantResources {
+        final List<Bitmap> images = new ArrayList<>();
+        TextRecognizer recognizer;
+        Bitmap keep(Bitmap image) { if (!images.contains(image)) images.add(image); return image; }
+        void close() {
+            try { if (recognizer != null) recognizer.close(); }
+            finally { for (Bitmap bitmap : images) if (bitmap != null && !bitmap.isRecycled()) bitmap.recycle(); }
+        }
+    }
+
+    private void runBadgeVariants() {
+        Bundle result = new Bundle();
+        java.util.concurrent.ExecutorService worker = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+            Thread thread = new Thread(r, "nameplate-variants-probe"); thread.setDaemon(true); return thread;
+        });
+        try {
+            String plateRef = args.getString("plateRef"), expected = args.getString("expectedLevel");
+            if (plateRef == null || !plateRef.matches("[0-9a-f]{64}")
+                    || (expected != null && !expected.matches("[1-9][0-9]{0,3}"))) throw new IllegalArgumentException("arguments");
+            java.util.concurrent.Future<String> future = worker.submit(() -> badgeVariants(plateRef, expected));
+            String output = future.get(15, TimeUnit.SECONDS);
+            result.putString("output", "workerFinished=true " + output);
+            finish(output.contains("allCompleted=true") ? 0 : 1, result);
+        } catch (java.util.concurrent.TimeoutException timeout) {
+            result.putString("output", "workerFinished=false controllerDeadlineExceeded=true"); finish(1, result);
+        } catch (Exception error) {
+            if (error instanceof InterruptedException) Thread.currentThread().interrupt();
+            result.putString("output", "probeError=" + error.getClass().getSimpleName()); finish(1, result);
+        } finally { worker.shutdown(); }
+    }
+
+    private String badgeVariants(String plateRef, String expected) throws Exception {
+        long started = SystemClock.elapsedRealtime();
+        VariantResources resources = new VariantResources();
+        NotificationOcrLease lease = BOX_GATE.acquire(resources::close);
+        if (lease == null) return "allCompleted=false leaseBusy=true";
+        try {
+            Bitmap plate = resources.keep(NameplateStore.load(getTargetContext(), plateRef, NameplateAssetPolicy.MAX_PIXELS));
+            if (plate == null) return "allCompleted=false plateLoaded=false";
+            int w = plate.getWidth(), h = plate.getHeight();
+            NameplateIdentityGeometry geometry = NameplateIdentityGeometry.of(w, h);
+            int[] bounds = geometry == null ? null : NotificationBadgePolicy.cropRegion(geometry.badge, w, h);
+            if (bounds == null) return "allCompleted=false invalidGeometry=true";
+            Bitmap crop = resources.keep(Bitmap.createBitmap(plate, bounds[0], bounds[1], bounds[2]-bounds[0], bounds[3]-bounds[1]));
+            Bitmap scaled = resources.keep(Bitmap.createScaledBitmap(crop, crop.getWidth()*3, crop.getHeight()*3, true));
+            resources.recognizer = TextRecognition.getClient(new ChineseTextRecognizerOptions.Builder().build());
+            StringBuilder out = new StringBuilder("plate=").append(w).append('x').append(h)
+                    .append(" crop=").append(bounds[0]).append(',').append(bounds[1]).append(',').append(bounds[2]).append(',').append(bounds[3]).append('\n');
+            for (int variant = 0; variant < 4; variant++) {
+                if (variant == 3 && (long) crop.getWidth()*crop.getHeight()*25 > 250_000) {
+                    out.append("variant=3 skipped=pixelCap\n"); continue;
+                }
+                Bitmap image = variant == 0 ? scaled : variant == 3
+                        ? resources.keep(Bitmap.createScaledBitmap(crop, crop.getWidth()*5, crop.getHeight()*5, true))
+                        : resources.keep(badgeVariant(scaled, variant));
+                long token = lease.beginTask(); boolean submitted = false;
+                try {
+                    com.google.android.gms.tasks.Task<Text> task = resources.recognizer.process(InputImage.fromBitmap(image, 0));
+                    submitted = true;
+                    lease.setProbe(token, task::isComplete);
+                    task.addOnCompleteListener(Runnable::run, ignored -> lease.nativeDone(token));
+                    Text text;
+                    try { text = Tasks.await(task, 3, TimeUnit.SECONDS); }
+                    catch (java.util.concurrent.TimeoutException timeout) {
+                        return out.append("variant=").append(variant).append(" completed=false timeout=true allCompleted=false").toString();
+                    }
+                    if (task.isComplete()) lease.nativeDone(token);
+                    List<NotificationIdentityParser.TextRow> rows = new ArrayList<>();
+                    StringBuilder tokens = new StringBuilder();
+                    int count = 0;
+                    for (Text.TextBlock block : text.getTextBlocks()) for (Text.Line line : block.getLines()) {
+                        count++;
+                        String value = line.getText() == null ? "" : line.getText().trim();
+                        if (tokens.length() > 0) tokens.append(',');
+                        tokens.append(value.matches("[0-9]{1,16}") ? value : "nonNumeric");
+                        OcrLine parent = validLine(line.getText(), line.getBoundingBox(), image.getWidth(), image.getHeight());
+                        List<OcrLine> children = new ArrayList<>();
+                        for (Text.Element element : line.getElements()) {
+                            OcrLine child = validLine(element.getText(), element.getBoundingBox(), image.getWidth(), image.getHeight());
+                            children.add(child);
+                        }
+                        rows.add(new NotificationIdentityParser.TextRow(parent, children));
+                    }
+                    Integer level = NotificationBadgePolicy.level(rows, image.getWidth(), image.getHeight());
+                    out.append("variant=").append(variant).append(" size=").append(image.getWidth()).append('x').append(image.getHeight())
+                            .append(" completed=true rows=").append(count).append(" tokens=").append(tokens)
+                            .append(" parsedLevel=").append(level == null ? "none" : level)
+                            .append(" expectedMatch=").append(expected == null ? "notRequested" : expected.equals(String.valueOf(level)))
+                            .append('\n');
+                } finally { if (!submitted) lease.nativeDone(token); }
+            }
+            return out.append("allCompleted=true elapsedMs=").append(SystemClock.elapsedRealtime()-started).toString();
+        } finally { lease.consumerDone(); }
+    }
+
+    /** 1=stretched grayscale, 2=Otsu bright pixels black. */
+    private static Bitmap badgeVariant(Bitmap source, int variant) {
+        int w=source.getWidth(), h=source.getHeight(), n=w*h;
+        int[] pixels=new int[n], histogram=new int[256];
+        source.getPixels(pixels,0,w,0,0,w,h);
+        for (int i=0;i<n;i++) {
+            int c=pixels[i], gray=(77*((c>>16)&255)+150*((c>>8)&255)+29*(c&255))>>8;
+            pixels[i]=gray; histogram[gray]++;
+        }
+        int low=0, high=255, cumulative=0;
+        for (int i=0;i<256;i++) { cumulative+=histogram[i]; if (cumulative>=n/10) { low=i; break; } }
+        cumulative=0;
+        for (int i=255;i>=0;i--) { cumulative+=histogram[i]; if (cumulative>=n/10) { high=i; break; } }
+        long total=0; for (int i=0;i<256;i++) total+=(long)i*histogram[i];
+        long sum=0; int count=0, threshold=127; double best=-1;
+        for (int i=0;i<255;i++) {
+            count+=histogram[i]; sum+=(long)i*histogram[i];
+            if (count==0 || count==n) continue;
+            double diff=(double)sum/count-(double)(total-sum)/(n-count);
+            double score=(double)count*(n-count)*diff*diff;
+            if (score>best) { best=score; threshold=i; }
+        }
+        for (int i=0;i<n;i++) {
+            int v=variant==1 ? Math.max(0,Math.min(255,(pixels[i]-low)*255/Math.max(1,high-low)))
+                    : (pixels[i]>threshold ? 0 : 255);
+            pixels[i]=0xff000000|(v<<16)|(v<<8)|v;
+        }
+        return Bitmap.createBitmap(pixels,w,h,Bitmap.Config.ARGB_8888);
+    }
+
+    private static final class BoxResources {
+        Bitmap bitmap;
+        TextRecognizer recognizer;
+        void close() {
+            try { if (recognizer != null) recognizer.close(); }
+            finally { if (bitmap != null && !bitmap.isRecycled()) bitmap.recycle(); }
+        }
+    }
+
+    /** One diagnostic OCR task on the saved plate; never emits identity text. */
+    private void runNameplateBoxes() {
+        Bundle result = new Bundle();
+        java.util.concurrent.ExecutorService worker = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+            Thread thread = new Thread(r, "nameplate-boxes-probe"); thread.setDaemon(true); return thread;
+        });
+        try {
+            String plateRef = args.getString("plateRef");
+            if (plateRef == null || !plateRef.matches("[0-9a-f]{64}")) throw new IllegalArgumentException("arguments");
+            java.util.concurrent.Future<String> future = worker.submit(() -> plateBoxes(plateRef));
+            String output = future.get(15, TimeUnit.SECONDS);
+            result.putString("output", "workerFinished=true " + output);
+            finish(output.contains("ocrCompleted=true") ? 0 : 1, result);
+        } catch (java.util.concurrent.TimeoutException timeout) {
+            result.putString("output", "workerFinished=false controllerDeadlineExceeded=true"); finish(1, result);
+        } catch (Exception error) {
+            if (error instanceof InterruptedException) Thread.currentThread().interrupt();
+            result.putString("output", "probeError=" + error.getClass().getSimpleName()); finish(1, result);
+        } finally { worker.shutdown(); }
+    }
+
+    private String plateBoxes(String plateRef) throws Exception {
+        long started = SystemClock.elapsedRealtime();
+        BoxResources resources = new BoxResources();
+        NotificationOcrLease lease = BOX_GATE.acquire(resources::close);
+        if (lease == null) return "ocrCompleted=false leaseBusy=true";
+        try {
+            resources.bitmap = NameplateStore.load(getTargetContext(), plateRef, NameplateAssetPolicy.MAX_PIXELS);
+            if (resources.bitmap == null) return "ocrCompleted=false plateLoaded=false";
+            int width = resources.bitmap.getWidth(), height = resources.bitmap.getHeight();
+            resources.recognizer = TextRecognition.getClient(new ChineseTextRecognizerOptions.Builder().build());
+            long token = lease.beginTask();
+            boolean submitted = false;
+            try {
+                com.google.android.gms.tasks.Task<Text> task = resources.recognizer.process(InputImage.fromBitmap(resources.bitmap, 0));
+                submitted = true;
+                lease.setProbe(token, task::isComplete);
+                task.addOnCompleteListener(Runnable::run, ignored -> lease.nativeDone(token));
+                Text text;
+                try { text = Tasks.await(task, 12, TimeUnit.SECONDS); }
+                catch (java.util.concurrent.TimeoutException timeout) {
+                    return "ocrCompleted=false ocrDeadlineExceeded=true width=" + width + " height=" + height
+                            + " elapsedMs=" + (SystemClock.elapsedRealtime() - started);
+                }
+                if (task.isComplete()) lease.nativeDone(token);
+                StringBuilder output = new StringBuilder("ocrCompleted=true width=").append(width).append(" height=").append(height)
+                        .append(" elapsedMs=").append(SystemClock.elapsedRealtime() - started).append('\n');
+                int row = 0;
+                for (Text.TextBlock block : text.getTextBlocks()) for (Text.Line line : block.getLines()) {
+                    if (row >= 50) { output.append("rowsTruncated=true\n"); return output.toString(); }
+                    appendBox(output, "row", row, -1, line.getText(), line.getBoundingBox());
+                    int child = 0;
+                    for (Text.Element element : line.getElements()) {
+                        if (child >= 30) { output.append("elementsTruncated=true\n"); break; }
+                        appendBox(output, "element", row, child++, element.getText(), element.getBoundingBox());
+                    }
+                    row++;
+                }
+                return output.toString();
+            } finally { if (!submitted) lease.nativeDone(token); }
+        } finally { lease.consumerDone(); }
+    }
+
+    private static void appendBox(StringBuilder output, String kind, int row, int child, String text, Rect bounds) {
+        String value = text == null ? "" : text.trim();
+        String category = value.matches("[0-9]+") ? "DIGITS" :
+                (value.contains("万") || value.contains("/") || value.contains("／") ? "EXP" : "OTHER");
+        output.append(kind).append(" row=").append(row);
+        if (child >= 0) output.append(" child=").append(child);
+        output.append(" class=").append(category).append(" chars=").append(value.codePointCount(0, value.length()));
+        if (category.equals("DIGITS")) output.append(" digits=").append(value);
+        output.append(" bounds=").append(bounds == null ? "none" : rect(bounds.left, bounds.top, bounds.right, bounds.bottom)).append('\n');
     }
 
     /** Read the production plate directly, without assets or source-frame access. */

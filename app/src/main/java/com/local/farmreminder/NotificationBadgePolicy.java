@@ -7,17 +7,30 @@ import java.util.List;
 /** Isolated fixed badge slot for the known header layout; unknown layouts fail softly. */
 final class NotificationBadgePolicy {
     static final int SCALE = 3;
+    private static final long MAX_SCALED_PIXELS = 250_000;
     static int[] crop(AvatarLocator.Bounds avatar, int width, int height) {
         if (avatar == null || avatar.left < 0 || avatar.top < 0 || avatar.right > width
                 || avatar.bottom > height || avatar.right <= avatar.left || avatar.bottom <= avatar.top) return null;
         double d = avatar.right - avatar.left;
         double left = avatar.left + .68 * d, top = avatar.top + .44 * d;
         double right = avatar.left + 1.20 * d, bottom = avatar.top + .88 * d;
+        return cropRegion(new NotificationIdentityParser.Region(left, top, right, bottom), width, height);
+    }
+    static int[] cropRegion(NotificationIdentityParser.Region region, int width, int height) {
+        if (region == null) return null;
+        double left = region.left, top = region.top, right = region.right, bottom = region.bottom;
         if (left < 0 || top < 0 || right > width || bottom > height) return null;
         int l = (int) Math.floor(left), t = (int) Math.floor(top);
         int r = (int) Math.ceil(right), b = (int) Math.ceil(bottom);
-        if (r <= l || b <= t || (long) (r-l) * (b-t) * SCALE * SCALE > 250_000) return null;
+        if (r <= l || b <= t || (long) (r-l) * (b-t) * SCALE * SCALE > MAX_SCALED_PIXELS) return null;
         return new int[]{l, t, r, b};
+    }
+    static int plateScale(int width, int height) {
+        if (width <= 0 || height <= 0) return 0;
+        long pixels = (long) width * height;
+        for (int scale = 5; scale >= 1; scale--)
+            if (pixels <= MAX_SCALED_PIXELS / (scale * scale)) return scale;
+        return 0;
     }
     static Integer level(List<NotificationIdentityParser.TextRow> rows, int width, int height) {
         if (rows == null || rows.size() != 1) return null;

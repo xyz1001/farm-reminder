@@ -95,8 +95,8 @@ final class NotificationIdentityOcr {
     private static NotificationIdentityLabel readOwned(Resources resources, NotificationOcrLease lease, long deadlineElapsed, boolean plate) throws Exception {
             if (resources.bitmap == null || remaining(deadlineElapsed) <= 0) return NotificationIdentityLabel.EMPTY;
             int w = resources.bitmap.getWidth(), h = resources.bitmap.getHeight();
-            AvatarLocator.Bounds plateAvatar = plate ? NameplateLocator.portraitInStoredPlate(w, h) : null;
-            if (plate && plateAvatar == null) return NotificationIdentityLabel.EMPTY;
+            NameplateIdentityGeometry geometry = plate ? NameplateIdentityGeometry.of(w, h) : null;
+            if (plate && geometry == null) return NotificationIdentityLabel.EMPTY;
             resources.recognizer = TextRecognition.getClient(new ChineseTextRecognizerOptions.Builder().build());
             Text result = recognize(resources, lease, resources.bitmap, deadlineElapsed);
             long parseDeadline = deadlineElapsed > Long.MAX_VALUE - 250 ? Long.MAX_VALUE : deadlineElapsed + 250;
@@ -115,25 +115,29 @@ final class NotificationIdentityOcr {
                 rows.add(new NotificationIdentityParser.TextRow(parent, elements));
             }
             if (remaining(parseDeadline) <= 0) return NotificationIdentityLabel.EMPTY;
-            AvatarLocator.Bounds avatar = plateAvatar;
+            AvatarLocator.Bounds avatar = null;
             if (!plate) {
                 int[] pixels = new int[w * h];
                 resources.bitmap.getPixels(pixels, 0, w, 0, 0, w, h);
                 if (remaining(parseDeadline) <= 0) return NotificationIdentityLabel.EMPTY;
                 avatar = AvatarLocator.locate(pixels, w, h, lines);
             }
-            if (avatar == null || remaining(parseDeadline) <= 0) return NotificationIdentityLabel.EMPTY;
-            int d = avatar.right - avatar.left;
-            boolean completeBadge = d > 0 && avatar.left + 1.20 * d <= w && avatar.top + .88 * d <= h
-                    && avatar.left + .68 * d >= 0 && avatar.top + .44 * d >= 0;
-            NotificationIdentityLabel label = NotificationIdentityParser.parseRows(rows, avatar, w, h, true, completeBadge);
+            if ((!plate && avatar == null) || remaining(parseDeadline) <= 0) return NotificationIdentityLabel.EMPTY;
+            int d = plate ? 0 : avatar.right - avatar.left;
+            boolean completeBadge = plate || (d > 0 && avatar.left + 1.20 * d <= w && avatar.top + .88 * d <= h
+                    && avatar.left + .68 * d >= 0 && avatar.top + .44 * d >= 0);
+            NotificationIdentityLabel label = plate
+                    ? NotificationIdentityParser.parsePlateRows(rows, geometry, w, h, completeBadge)
+                    : NotificationIdentityParser.parseRows(rows, avatar, w, h, true, completeBadge);
             if (remaining(parseDeadline) <= 0 || label == null) return NotificationIdentityLabel.EMPTY;
             if (label.hasLevel() || !completeBadge || remaining(deadlineElapsed) <= 0) return label;
-            int[] crop = NotificationBadgePolicy.crop(avatar, w, h);
+            int[] crop = plate ? NotificationBadgePolicy.cropRegion(geometry.badge, w, h) : NotificationBadgePolicy.crop(avatar, w, h);
             if (crop == null) return label;
             try {
+                int scale = plate ? NotificationBadgePolicy.plateScale(crop[2]-crop[0], crop[3]-crop[1]) : NotificationBadgePolicy.SCALE;
+                if (scale == 0) return label;
                 resources.crop = Bitmap.createBitmap(resources.bitmap, crop[0], crop[1], crop[2]-crop[0], crop[3]-crop[1]);
-                resources.scaled = Bitmap.createScaledBitmap(resources.crop, (crop[2]-crop[0])*3, (crop[3]-crop[1])*3, true);
+                resources.scaled = Bitmap.createScaledBitmap(resources.crop, (crop[2]-crop[0])*scale, (crop[3]-crop[1])*scale, true);
                 Text badge = recognize(resources, lease, resources.scaled, deadlineElapsed);
                 if (badge == null || remaining(parseDeadline) <= 0) return label;
                 List<NotificationIdentityParser.TextRow> badgeRows = new ArrayList<>();
