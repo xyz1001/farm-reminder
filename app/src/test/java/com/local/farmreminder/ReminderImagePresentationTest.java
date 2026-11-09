@@ -124,12 +124,13 @@ public class ReminderImagePresentationTest {
         assertEquals(a.plateRef,ReminderImagePresentation.plateRef(Arrays.asList(b,a)));
     }
 
-    @Test public void expandedPictureSummaryPreservesSecondsLeadAndRecordCountWithoutPrivateFields() {
+    @Test public void expandedPictureSummaryPreservesSecondsAndCountWithoutDateOrAdvanceNotice() {
         Calendar local=Calendar.getInstance();local.clear();local.set(2026,Calendar.JANUARY,15,3,4,5);
         Reminder a=record("a",local.getTimeInMillis()),b=record("b",local.getTimeInMillis()+1000); a.friend="private-name";a.crop="private-crop";
         String text=ReminderImagePresentation.summary(Arrays.asList(b,a));
-        assertTrue(text.startsWith("2条提醒 · 成熟时间")); assertTrue(text.contains("03:04:05"));
-        assertTrue(text.contains("提前1分钟提醒")); assertFalse(text.contains("private"));
+        assertEquals("2条提醒 · 成熟时间 03:04:05", text);
+        assertFalse(text.contains("提前")); assertFalse(text.contains("月"));
+        assertFalse(text.contains("日")); assertFalse(text.contains("private"));
         assertEquals(2,ReminderNotificationActions.available(true).length);
         assertEquals(ReminderNotificationActions.Target.APP,ReminderNotificationActions.contentTarget());
     }

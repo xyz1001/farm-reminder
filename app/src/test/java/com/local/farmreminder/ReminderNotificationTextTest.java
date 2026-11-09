@@ -17,12 +17,12 @@ public class ReminderNotificationTextTest {
         assertEquals("", ReminderNotificationText.avatarRef(null));
     }
 
-    @Test public void singleReminderShowsSecondsAndHonestAdvanceNoticeWithoutPrivateFields() {
+    @Test public void singleReminderShowsOnlyMaturityTimeWithoutDateOrAdvanceNotice() {
         Reminder r = reminder("a", "旧昵称🌱", 3, 4, 5);
         List<Reminder> reminders = Collections.singletonList(r);
         assertEquals("农场提醒", ReminderNotificationText.title(1));
-        assertEquals("成熟时间 03:04:05 · 提前1分钟提醒", ReminderNotificationText.text(reminders));
-        assertEquals("1. 成熟时间 1月15日 03:04:05 · 提前1分钟提醒", ReminderNotificationText.expandedText(reminders));
+        assertEquals("成熟时间 03:04:05", ReminderNotificationText.text(reminders));
+        assertEquals("1. 成熟时间 03:04:05", ReminderNotificationText.expandedText(reminders));
         assertEquals("旧昵称🌱", r.friend);
         assertEquals("fixture-crop", r.crop);
         assertFalse(r.fired);
@@ -48,8 +48,8 @@ public class ReminderNotificationTextTest {
         List<Reminder> reminders = Collections.unmodifiableList(Arrays.asList(later, earlier));
         assertEquals("农场提醒 · 2条", ReminderNotificationText.title(2));
         assertEquals("2条提醒 · 最早成熟时间 03:04:05", ReminderNotificationText.text(reminders));
-        assertEquals("1. 成熟时间 1月15日 03:04:05 · 提前1分钟提醒\n"
-                + "2. 成熟时间 1月15日 03:04:06 · 提前1分钟提醒", ReminderNotificationText.expandedText(reminders));
+        assertEquals("1. 成熟时间 03:04:05\n"
+                + "2. 成熟时间 03:04:06", ReminderNotificationText.expandedText(reminders));
         assertSame(later, reminders.get(0));
         assertEquals("同名", later.friend);
         assertFalse(later.fired);
@@ -62,19 +62,20 @@ public class ReminderNotificationTextTest {
         String expanded = ReminderNotificationText.expandedText(reminders);
         assertEquals("8条提醒 · 最早成熟时间 03:04:00", ReminderNotificationText.text(reminders));
         assertEquals(6, expanded.split("\n").length);
-        assertTrue(expanded.contains("5. 成熟时间 1月15日 03:04:04 · 提前1分钟提醒\n另3条"));
+        assertTrue(expanded.contains("5. 成熟时间 03:04:04\n另3条"));
         assertFalse(expanded.contains("03:04:05"));
         assertFalse(expanded.contains("private"));
         assertFalse(expanded.contains("fixture-crop"));
         assertEquals(8, reminders.size());
     }
 
-    @Test public void zeroAndSecondsLeadDoNotClaimAlreadyMature() {
+    @Test public void zeroAndSecondsLeadDoNotAddScheduleCopyOrClaimAlreadyMature() {
         Reminder r = reminder("a", "old", 3, 4, 5);
         r.triggerAt = r.matureAt;
-        assertEquals("成熟时间 03:04:05 · 成熟时提醒", ReminderNotificationText.text(Collections.singletonList(r)));
+        assertEquals("成熟时间 03:04:05", ReminderNotificationText.text(Collections.singletonList(r)));
         r.triggerAt = r.matureAt - 15000;
-        assertEquals("成熟时间 03:04:05 · 提前15秒提醒", ReminderNotificationText.text(Collections.singletonList(r)));
+        assertEquals("成熟时间 03:04:05", ReminderNotificationText.text(Collections.singletonList(r)));
+        assertEquals("1. 成熟时间 03:04:05", ReminderNotificationText.expandedText(Collections.singletonList(r)));
         assertFalse(ReminderNotificationText.expandedText(Collections.singletonList(r)).contains("已成熟"));
     }
 
@@ -104,7 +105,7 @@ public class ReminderNotificationTextTest {
         NotificationIdentityLabel name = NotificationIdentityLabel.of("示例姓名", 148);
         assertEquals("示例姓名(148级) · 2条提醒", ReminderNotificationText.title(2, name));
         assertEquals(ReminderNotificationText.text(records), ReminderNotificationText.text(records, name));
-        assertTrue(ReminderNotificationText.expandedText(records, name).startsWith("示例姓名(148级)\n1. 成熟时间 1月15日 03:04:05"));
+        assertTrue(ReminderNotificationText.expandedText(records, name).startsWith("示例姓名(148级)\n1. 成熟时间 03:04:05"));
         NotificationIdentityLabel level = NotificationIdentityLabel.of(null, 148);
         assertEquals("好友(148级) · 农场提醒", ReminderNotificationText.title(1, level));
         assertTrue(ReminderNotificationText.expandedText(records, level).startsWith("好友(148级)\n"));
@@ -112,12 +113,14 @@ public class ReminderNotificationTextTest {
         assertFalse(ReminderNotificationText.expandedText(records, level).contains("stored-name"));
     }
 
-    @Test public void absentOptionalIdentityExactlyPreservesGenericText() {
+    @Test public void absentIdentityShowsFriendWithoutInventingNameOrLevel() {
         List<Reminder> records = Collections.singletonList(reminder("a", "stored-name", 3, 4, 5));
-        for (NotificationIdentityLabel label : new NotificationIdentityLabel[]{null, NotificationIdentityLabel.EMPTY}) {
-            assertEquals(ReminderNotificationText.title(1), ReminderNotificationText.title(1, label));
+        for (NotificationIdentityLabel label : new NotificationIdentityLabel[]{null, NotificationIdentityLabel.EMPTY,
+                NotificationIdentityLabel.of("经验", null), NotificationIdentityLabel.of("", null)}) {
+            assertEquals("好友 · 农场提醒", ReminderNotificationText.title(1, label));
+            assertEquals("好友 · 2条提醒", ReminderNotificationText.title(2, label));
             assertEquals(ReminderNotificationText.text(records), ReminderNotificationText.text(records, label));
-            assertEquals(ReminderNotificationText.expandedText(records), ReminderNotificationText.expandedText(records, label));
+            assertEquals("好友\n1. 成熟时间 03:04:05", ReminderNotificationText.expandedText(records, label));
         }
         assertEquals("", ReminderNotificationText.expandedText(Collections.emptyList(), NotificationIdentityLabel.of("示例", null)));
     }
