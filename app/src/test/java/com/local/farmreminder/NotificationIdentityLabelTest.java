@@ -4,12 +4,15 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class NotificationIdentityLabelTest {
-    @Test public void safeNameWinsThenPositiveBoundedLevelThenEmpty() {
-        assertEquals("示例", NotificationIdentityLabel.of(" 示例 ", 148).text());
-        assertEquals("148级的好友", NotificationIdentityLabel.of(null, 148).text());
-        assertEquals("9999级的好友", NotificationIdentityLabel.of("", 9999).text());
-        for (Integer bad : new Integer[]{null, -1, 0, 10000, Integer.MAX_VALUE})
+    @Test public void nameAndPositiveBoundedLevelAreCombinedOrFallBackSafely() {
+        assertEquals("示例(148级)", NotificationIdentityLabel.of(" 示例 ", 148).text());
+        assertEquals("好友(148级)", NotificationIdentityLabel.of(null, 148).text());
+        assertEquals("好友(9999级)", NotificationIdentityLabel.of("", 9999).text());
+        assertEquals("示例(1级)", NotificationIdentityLabel.of("示例", 1).text());
+        for (Integer bad : new Integer[]{null, -1, 0, 10000, Integer.MAX_VALUE}) {
             assertSame(NotificationIdentityLabel.EMPTY, NotificationIdentityLabel.of(null, bad));
+            assertEquals("示例", NotificationIdentityLabel.of("示例", bad).text());
+        }
     }
 
     @Test public void singleNumericAndEmojiNamesAreNotDiscarded() {
@@ -29,7 +32,7 @@ public class NotificationIdentityLabelTest {
         for (String bad : new String[]{"甲\n乙", "\r甲", "甲\t乙", "甲\u0000", "甲\u0085", "甲\u2028乙",
                 "甲\u2029乙", "甲\u202E乙", "甲\u2066乙", "甲\u200F乙", "甲\u061C乙", "\uD800", "\uDC00"}) {
             assertSame(NotificationIdentityLabel.EMPTY, NotificationIdentityLabel.of(bad, null));
-            assertEquals("148级的好友", NotificationIdentityLabel.of(bad, 148).text());
+            assertEquals("好友(148级)", NotificationIdentityLabel.of(bad, 148).text());
         }
     }
 

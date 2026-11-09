@@ -17,9 +17,10 @@ public final class NotificationIdentityLabel {
 
     public static NotificationIdentityLabel of(String name, Integer level) {
         String safe = safeName(name);
-        if (!safe.isEmpty()) return new NotificationIdentityLabel(safe);
-        return level != null && level > 0 && level <= 9999
-                ? new NotificationIdentityLabel(level + "级的好友") : EMPTY;
+        if (level != null && level > 0 && level <= 9999) {
+            return new NotificationIdentityLabel((safe.isEmpty() ? "好友" : safe) + "(" + level + "级)");
+        }
+        return safe.isEmpty() ? EMPTY : new NotificationIdentityLabel(safe);
     }
 
     public String text() { return value; }

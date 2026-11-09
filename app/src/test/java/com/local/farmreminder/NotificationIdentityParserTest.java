@@ -21,12 +21,12 @@ public class NotificationIdentityParserTest {
         return NotificationIdentityParser.parse(lines, elements, FRAME, 1240, 2772, true, true);
     }
 
-    @Test public void redactedRealGeometryNameWinsOverComplete148Badge() {
-        assertEquals("示例姓名", parse(row(name("示例姓名")), grade("148")).text());
+    @Test public void redactedRealGeometryCombinesNameAndComplete148Badge() {
+        assertEquals("示例姓名(148级)", parse(row(name("示例姓名")), grade("148")).text());
     }
 
     @Test public void failedNameFallsBackToIndependent148WithoutCorrectingOldOcr() {
-        assertEquals("148级的好友", parse(row(name("经验")), grade("148")).text());
+        assertEquals("好友(148级)", parse(row(name("经验")), grade("148")).text());
         assertSame(NotificationIdentityLabel.EMPTY, parse(row(name("经验")),
                 row(new OcrLine("048140万/142万", 152, 234, 410, 280))));
     }
@@ -56,7 +56,7 @@ public class NotificationIdentityParserTest {
     @Test public void multipleDistinctNamesAreUnknownButDuplicateOcrLinesAreNotAmbiguous() {
         assertSame(NotificationIdentityLabel.EMPTY, parse(row(name("示例甲")), row(name("示例乙"))));
         assertEquals("示例甲", parse(row(name("示例甲")), row(name("示例甲"))).text());
-        assertEquals("148级的好友", parse(row(name("示例甲")), row(name("示例乙")), grade("148")).text());
+        assertEquals("好友(148级)", parse(row(name("示例甲")), row(name("示例乙")), grade("148")).text());
     }
 
     @Test public void topTitlesBottomNamesProgressAndTimersCannotBecomeHeaderName() {
@@ -77,7 +77,7 @@ public class NotificationIdentityParserTest {
     }
 
     @Test public void wholeIndependentLineCanSupplyLevelButNotWhenItsParentIsAmbiguous() {
-        assertEquals("148级的好友", parse(row(level("148级"))).text());
+        assertEquals("好友(148级)", parse(row(level("148级"))).text());
         assertSame(NotificationIdentityLabel.EMPTY, parse(row(level("148")),
                 row(new OcrLine("048140万/142万", 152, 234, 410, 280))));
     }
@@ -85,7 +85,7 @@ public class NotificationIdentityParserTest {
     @Test public void levelDoesNotSplitCorrectPrefixesOrAcceptNonAsciiAndUiUnits() {
         for (String bad : new String[]{"048", "0", "10000", "148/200", "148.0", "148%", "148万", "148x", "148:00", "１４８", "1 48"})
             assertSame(NotificationIdentityLabel.EMPTY, parse(grade(bad)));
-        assertEquals("9999级的好友", parse(grade("9999")).text());
+        assertEquals("好友(9999级)", parse(grade("9999")).text());
     }
 
     @Test public void conflictingSeparateLevelsAreUnknown() {
@@ -97,7 +97,7 @@ public class NotificationIdentityParserTest {
     @Test public void clipped14IsUnknownButComplete14IsNotBlacklistedAndNameSurvivesClipping() {
         assertSame(NotificationIdentityLabel.EMPTY, NotificationIdentityParser.parseRows(Collections.singletonList(grade("14")),
                 FRAME, 1240, 2772, true, false));
-        assertEquals("14级的好友", parse(grade("14")).text());
+        assertEquals("好友(14级)", parse(grade("14")).text());
         assertEquals("示例", NotificationIdentityParser.parseRows(Arrays.asList(row(name("示例")), grade("14")),
                 FRAME, 1240, 2772, true, false).text());
     }
@@ -111,12 +111,12 @@ public class NotificationIdentityParserTest {
     @Test public void uniformScaleAndViewportOffsetPreserveParserResult() {
         AvatarLocator.Bounds half = new AvatarLocator.Bounds(22, 82, 98, 158);
         OcrLine halfGrade = new OcrLine("148", 80, 121, 108, 139);
-        assertEquals("示例", NotificationIdentityParser.parseRows(Arrays.asList(
+        assertEquals("示例(148级)", NotificationIdentityParser.parseRows(Arrays.asList(
                 row(new OcrLine("示例", 100, 95, 186, 117)), row(halfGrade, halfGrade)),
                 half, 620, 1386, true, true).text());
-        assertEquals("148级的好友", NotificationIdentityParser.parseRows(Collections.singletonList(row(halfGrade, halfGrade)),
+        assertEquals("好友(148级)", NotificationIdentityParser.parseRows(Collections.singletonList(row(halfGrade, halfGrade)),
                 half, 620, 1386, true, true).text());
-        assertEquals("148级的好友", NotificationIdentityParser.parseRows(Collections.singletonList(
+        assertEquals("好友(148级)", NotificationIdentityParser.parseRows(Collections.singletonList(
                 row(new OcrLine("148 30/60", 80, 121, 205, 139), halfGrade,
                         new OcrLine("30/60", 120, 122, 205, 139))), half, 620, 1386, true, true).text());
         assertSame(NotificationIdentityLabel.EMPTY, NotificationIdentityParser.parseRows(Collections.singletonList(
@@ -124,7 +124,7 @@ public class NotificationIdentityParserTest {
                         new OcrLine("%", 94, 121, 110, 139))), half, 620, 1386, true, true));
         AvatarLocator.Bounds shifted = new AvatarLocator.Bounds(64, 264, 216, 416);
         OcrLine shiftedGrade = new OcrLine("148", 179, 341, 237, 378);
-        assertEquals("148级的好友", NotificationIdentityParser.parseRows(Collections.singletonList(row(shiftedGrade, shiftedGrade)),
+        assertEquals("好友(148级)", NotificationIdentityParser.parseRows(Collections.singletonList(row(shiftedGrade, shiftedGrade)),
                 shifted, 1280, 2972, true, true).text());
     }
 
@@ -145,10 +145,10 @@ public class NotificationIdentityParserTest {
     @Test public void separateLevelAndOutsideExperienceWithinSameWideParentAreAllowed() {
         OcrLine parent = new OcrLine("148 30/60", 159, 241, 410, 278);
         OcrLine experience = new OcrLine("30/60", 240, 244, 410, 278);
-        assertEquals("148级的好友", parse(row(parent, level("148"), experience)).text());
-        assertEquals("148级的好友", flat(Collections.singletonList(parent), Arrays.asList(level("148"), experience)).text());
+        assertEquals("好友(148级)", parse(row(parent, level("148"), experience)).text());
+        assertEquals("好友(148级)", flat(Collections.singletonList(parent), Arrays.asList(level("148"), experience)).text());
         // Outside percentages are not a blanket veto when the true level is spatially separate.
-        assertEquals("148级的好友", parse(row(new OcrLine("148 30%", 159, 241, 410, 278), level("148"),
+        assertEquals("好友(148级)", parse(row(new OcrLine("148 30%", 159, 241, 410, 278), level("148"),
                 new OcrLine("30%", 240, 244, 410, 278))).text());
     }
 
@@ -162,7 +162,7 @@ public class NotificationIdentityParserTest {
     }
 
     @Test public void explicitSeparateLevelSuffixIsAllowedButNotArbitraryUnits() {
-        assertEquals("148级的好友", parse(row(new OcrLine("148级", 159, 241, 222, 278),
+        assertEquals("好友(148级)", parse(row(new OcrLine("148级", 159, 241, 222, 278),
                 new OcrLine("148", 159, 241, 201, 278), new OcrLine("级", 203, 241, 222, 278))).text());
     }
 
@@ -193,7 +193,7 @@ public class NotificationIdentityParserTest {
         List<OcrLine> source = new ArrayList<>(Collections.singletonList(level("148")));
         TextRow row = new TextRow(level("148"), source);
         source.clear();
-        assertEquals("148级的好友", parse(row).text());
+        assertEquals("好友(148级)", parse(row).text());
         try { row.elements.clear(); fail("must be immutable"); } catch (UnsupportedOperationException expected) { }
         assertTrue(new TextRow(level("148"), null).elements.isEmpty());
     }

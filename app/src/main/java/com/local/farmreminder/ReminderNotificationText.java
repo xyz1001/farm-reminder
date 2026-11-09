@@ -20,7 +20,7 @@ final class ReminderNotificationText {
     static String title(int count, NotificationIdentityLabel identity) {
         String label = identity == null ? "" : identity.text();
         if (label.isEmpty()) return title(count);
-        // The validated label is bounded to 64 code points. Let native layout ellipsize it;
+        // The validated name is bounded to 64 code points. Let native layout ellipsize it;
         // manual UTF-16/code-point slicing could cut an emoji ZWJ/variation sequence.
         return label + (count > 1 ? " · " + count + "条提醒" : " · 农场提醒");
     }

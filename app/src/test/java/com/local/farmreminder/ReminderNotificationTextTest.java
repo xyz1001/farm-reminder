@@ -102,11 +102,13 @@ public class ReminderNotificationTextTest {
     @Test public void optionalIdentityUsesTitleAndExpandedHeaderWhileKeepingTimeBodyAndCounts() {
         List<Reminder> records = Arrays.asList(reminder("a", "stored-name", 3, 4, 5), reminder("b", "stored-name", 3, 4, 6));
         NotificationIdentityLabel name = NotificationIdentityLabel.of("示例姓名", 148);
-        assertEquals("示例姓名 · 2条提醒", ReminderNotificationText.title(2, name));
+        assertEquals("示例姓名(148级) · 2条提醒", ReminderNotificationText.title(2, name));
         assertEquals(ReminderNotificationText.text(records), ReminderNotificationText.text(records, name));
-        assertTrue(ReminderNotificationText.expandedText(records, name).startsWith("示例姓名\n1. 成熟时间 1月15日 03:04:05"));
+        assertTrue(ReminderNotificationText.expandedText(records, name).startsWith("示例姓名(148级)\n1. 成熟时间 1月15日 03:04:05"));
         NotificationIdentityLabel level = NotificationIdentityLabel.of(null, 148);
-        assertEquals("148级的好友 · 农场提醒", ReminderNotificationText.title(1, level));
+        assertEquals("好友(148级) · 农场提醒", ReminderNotificationText.title(1, level));
+        assertTrue(ReminderNotificationText.expandedText(records, level).startsWith("好友(148级)\n"));
+        assertEquals("示例姓名 · 农场提醒", ReminderNotificationText.title(1, NotificationIdentityLabel.of("示例姓名", null)));
         assertFalse(ReminderNotificationText.expandedText(records, level).contains("stored-name"));
     }
 
