@@ -85,7 +85,7 @@ public final class ShizukuTaskGate {
             values = new Object[] { active, authorization.knownGrant(), authorization.fresh(now), debugPermissionAt,
                     debugStage, debugStageAt, connection != null, binding, pendingBinder != null, service != null,
                     bindAttempts, connectedCallbacks, linkSuccess, queryStarted, queryReturned, queryAccepted, queryTimeout,
-                    debugReject, debugException, debugRemoteReason, started, generation, debugInvalidate };
+                    debugReject, debugException, debugRemoteReason, started, generation, debugInvalidate, status };
         }
         return "gate active=" + values[0] + " permissionKnownGrant=" + values[1] + " permissionFresh=" + values[2]
                 + " permissionAge=" + LiveDiagnostics.age(now, (long) values[3]) + " stage=" + values[4]
@@ -95,7 +95,7 @@ public final class ShizukuTaskGate {
                 + " queryStarted=" + values[13] + " queryReturned=" + values[14] + " queryAccepted=" + values[15]
                 + " queryTimeout=" + values[16] + " lastReject=" + values[17] + " exceptionClass=" + values[18]
                 + " remoteReason=" + values[19] + " querySnapshotAge=" + LiveDiagnostics.age(now, (long) values[20])
-                + " generation=" + values[21] + " invalidateReason=" + values[22];
+                + " generation=" + values[21] + " invalidateReason=" + values[22] + " status=" + values[23];
     }
     private void debugException(Exception e) { synchronized (this) { debugException = LiveDiagnostics.exceptionName(e); } }
     public static boolean isEnabled(Context context) {
