@@ -179,6 +179,14 @@ public class FarmAccessibilityService extends AccessibilityService {
         DurableFrameEngine e = engine;
         return e == null ? new OcrProgress(0, 0, 0, 0, false, 0, 0, 0, false, "STOPPED") : e.progress();
     }
+    /** Read-only projection of the current foreground stay's blocking native capture failure. */
+    static ContainerCapturePolicy.CaptureIssue currentCaptureIssue() {
+        FarmAccessibilityService service = instance;
+        if (service == null || !service.alive() || !isRunning || !service.foreground
+                || engine == null || engine.epoch() != service.runEpoch)
+            return ContainerCapturePolicy.CaptureIssue.NONE;
+        return service.containerPolicy.captureIssue(service.captureSession, service.runEpoch);
+    }
     public static void refreshDiskProgress(Context context) { engine(context).refresh(); }
     public static void retryFailedFrames(Context context) { engine(context).retryFailed(); }
     public static void exportDiagnostics(Context context, android.net.Uri destination, DiagnosticsExportCallback callback) {
@@ -448,6 +456,7 @@ public class FarmAccessibilityService extends AccessibilityService {
             if (Build.VERSION.SDK_INT >= 30) takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, callback(session, epoch, sequence, request, uptime, wall, captureAttempt));
         } catch (RuntimeException e) {
             LifecycleDiagnostics.event(this, LifecycleDiagnostics.current(this), LifecycleHistory.Event.CAPTURE_FAILURE, LifecycleHistory.Reason.EXCEPTION, e);
+            containerPolicy.screenshotFailure(session, epoch, sequence, ContainerCapturePolicy.CaptureIssue.SCREENSHOT_FAILED);
             failProbe(session, epoch, sequence, EntryFeedbackDiagnostics.Reason.SCREENSHOT_FAILURE); capture.endCapture(request); errors++; reason = "USAGE_VERIFY_FAILED：截图请求失败"; lastStatus = reason; publish(); schedule();
         }
     }
@@ -479,6 +488,7 @@ public class FarmAccessibilityService extends AccessibilityService {
                     if (shizukuMode) announceIfAllowed();
                 } catch (RuntimeException e) {
                     LifecycleDiagnostics.event(FarmAccessibilityService.this, attempt, LifecycleHistory.Event.CAPTURE_FAILURE, LifecycleHistory.Reason.EXCEPTION, e);
+                    if (current) containerPolicy.screenshotFailure(session, epoch, sequence, ContainerCapturePolicy.CaptureIssue.SCREENSHOT_FAILED);
                     failProbe(session, epoch, sequence, EntryFeedbackDiagnostics.Reason.SCREENSHOT_FAILURE); errors++;
                     if (current && alive()) { reason = "USAGE_VERIFY_FAILED：截图保存交接失败"; lastStatus = reason; }
                 } finally {
@@ -492,14 +502,20 @@ public class FarmAccessibilityService extends AccessibilityService {
             @Override public void onFailure(int code) {
                 boolean current = currentCapture(session, epoch, sequence, request);
                 boolean timedOut = capture.captureTimedOut() && capture.captureId() == request;
-                failProbe(session, epoch, sequence, EntryFeedbackDiagnostics.Reason.SCREENSHOT_FAILURE);
+                boolean retry = current && code == ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT
+                        && containerPolicy.retryRateLimit(session, epoch, sequence, SystemClock.elapsedRealtime());
+                if (current && !retry) containerPolicy.screenshotFailure(session, epoch, sequence,
+                        code == ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT ? ContainerCapturePolicy.CaptureIssue.SCREENSHOT_RATE_LIMIT
+                                : ContainerCapturePolicy.CaptureIssue.SCREENSHOT_FAILED);
+                if (!retry) failProbe(session, epoch, sequence, EntryFeedbackDiagnostics.Reason.SCREENSHOT_FAILURE);
                 boolean released = capture.endCapture(request);
                 LifecycleDiagnostics.event(FarmAccessibilityService.this, attempt, LifecycleHistory.Event.CAPTURE_FAILURE, LifecycleHistory.Reason.NONE, null);
                 LifecycleDiagnostics.captureReleased(FarmAccessibilityService.this, attempt, timedOut, released);
                 if (current && alive()) {
                     errors++;
-                    if (code == ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT) nextCaptureAllowed = SystemClock.elapsedRealtime() + 2000;
-                    reason = (shizukuMode ? "截图错误代码 " : "USAGE_VERIFY_FAILED：截图错误代码 ") + code; lastStatus = reason; publish(); schedule();
+                    if (code == ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT) nextCaptureAllowed = Math.max(nextCaptureAllowed,
+                            retry ? containerPolicy.retryNotBefore() : SystemClock.elapsedRealtime() + 2000);
+                    reason = (retry ? "USAGE_VERIFY_PENDING：截图过于频繁，将重试 " : shizukuMode ? "截图错误代码 " : "USAGE_VERIFY_FAILED：截图错误代码 ") + code; lastStatus = reason; publish(); schedule();
                 } else if (alive() && isRunning) { publish(); schedule(); }
             }
         };
