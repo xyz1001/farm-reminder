@@ -98,7 +98,7 @@ public class MonitorForegroundService extends Service {
         if (manager == null) throw new IllegalStateException("notification unavailable");
         manager.createNotificationChannel(channel);
         LifecycleDiagnostics.event(this, lifecycleAttempt, LifecycleHistory.Event.FGS_PROMOTE_BEGIN, LifecycleHistory.Reason.NONE, null);
-        Notification notification = notification("等待监测条件");
+        Notification notification = notification(MonitorNotificationPresentation.content(null, null));
         if (Build.VERSION.SDK_INT >= 34) startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
         else startForeground(NOTIFICATION_ID, notification);
         foregroundStarted = true; isActive = true;
@@ -155,7 +155,9 @@ public class MonitorForegroundService extends Service {
                     MonitorCoordinator.running();
                 }
             }
-            String content = FarmAccessibilityService.isRunning ? FarmAccessibilityService.lastStatus : "等待监测条件（无需自动授权）";
+            String content = MonitorNotificationPresentation.content(FarmAccessibilityService.getOcrProgress(),
+                    ready ? null : wait.name(), ready ? FarmAccessibilityService.currentCaptureIssue()
+                            : ContainerCapturePolicy.CaptureIssue.NONE);
             if (!content.equals(lastContent)) {
                 NotificationManager manager = getSystemService(NotificationManager.class);
                 if (manager != null) manager.notify(NOTIFICATION_ID, notification(content));
@@ -176,7 +178,7 @@ public class MonitorForegroundService extends Service {
         PendingIntent open = PendingIntent.getActivity(this, 0, new Intent(this, MainActivity.class), flags);
         PendingIntent stop = PendingIntent.getService(this, 0, new Intent(this, MonitorForegroundService.class).setAction(ACTION_STOP), flags);
         return new Notification.Builder(this, CHANNEL).setSmallIcon(android.R.drawable.ic_menu_view)
-                .setContentTitle("农场监测").setContentText(content).setStyle(new Notification.BigTextStyle().bigText(content))
+                .setContentTitle(MonitorNotificationPresentation.TITLE).setContentText(content).setStyle(new Notification.BigTextStyle().bigText(content))
                 .setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true)
                 .addAction(new Notification.Action.Builder(null, "停止监测", stop).build()).build();
     }
