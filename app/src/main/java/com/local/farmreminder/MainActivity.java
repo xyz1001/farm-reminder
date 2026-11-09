@@ -37,6 +37,7 @@ import java.util.Set;
 
 /** A local-only dashboard. Accessibility monitoring and reminders are independent. */
 public class MainActivity extends Activity {
+    public static final String ACTION_SHOW_REMINDERS = "com.local.farmreminder.SHOW_REMINDERS";
     private static final int NOTIFICATIONS = 102;
     private static final int EXPORT_DIAGNOSTICS = 103;
     private static final int INK = 0xFF20382D, GREEN = 0xFF276344;
@@ -50,7 +51,7 @@ public class MainActivity extends Activity {
     private RadioGroup modeChoices;
     private RadioButton usageMode, shizukuMode;
     private boolean updatingMode;
-    private Button startButton, stopButton, retryButton, notificationButton, exactButton, clearButton;
+    private Button startButton, stopButton, retryButton, notificationButton, exactButton;
     private Button exportButton;
     private TextView exportStatus;
     private TextView vibrationStatus, vibrationHint;
@@ -67,7 +68,6 @@ public class MainActivity extends Activity {
     private String listSignature = "";
     private String feedbackMessage = "";
     private final Set<String> expandedGroups = new HashSet<>();
-    private boolean historyExpanded;
     private LinearLayout homePage, settingsPage, toolsPage, setupPage, navigation;
     private TextView setupProgress, setupTitle, setupDetail;
     private LinearLayout setupModes;
@@ -102,7 +102,6 @@ public class MainActivity extends Activity {
         settings = getSharedPreferences("settings", MODE_PRIVATE);
         if (state != null) {
             feedbackMessage = state.getString("feedbackMessage", "");
-            historyExpanded = state.getBoolean("historyExpanded", false);
             ArrayList<String> expanded = state.getStringArrayList("expandedGroups");
             if (expanded != null) expandedGroups.addAll(expanded);
             lifecycleAttempt = state.getLong("lifecycleGeneration", 0) == LifecycleDiagnostics.generation(this) ? state.getLong("lifecycleAttempt", 0) : 0;
@@ -130,9 +129,28 @@ public class MainActivity extends Activity {
         }
         screenBuilt = true;
         lastRequiredReady = SetupFlowPolicy.requiredReady(setupStep());
+        showRemindersIfRequested(getIntent());
         refresh();
         renderExportState();
         FarmAccessibilityService.refreshDiskProgress(this);
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (showRemindersIfRequested(intent)) refresh();
+    }
+
+    private boolean showRemindersIfRequested(Intent intent) {
+        if (intent == null || !ACTION_SHOW_REMINDERS.equals(intent.getAction())) return false;
+        currentPage = "home";
+        setupVisible = false;
+        reviewMode = false;
+        backStep = null;
+        lastRequiredReady = SetupFlowPolicy.requiredReady(setupStep());
+        // Consume this one-off route so later recreation preserves the user's selected tab.
+        setIntent(new Intent(intent).setAction(null));
+        return true;
     }
 
     private void buildScreen() {
@@ -247,12 +265,6 @@ public class MainActivity extends Activity {
             } catch (RuntimeException e) { showMessage("测试未能安排，请检查设置"); }
         });
 
-        clearButton = button(settingsPage, "清理历史记录", false, 16, () ->
-                new AlertDialog.Builder(this).setTitle("清除已提交记录？")
-                        .setMessage("只移除已提交提醒的记录，不影响待提醒项目。提交不代表实际送达。")
-                        .setNegativeButton("取消", null).setPositiveButton("清除", (d, w) -> {
-                            store.clearFired(); refresh();
-                        }).show());
         button(settingsPage, "截图与隐私", false, 8, this::showPrivacy);
         buildSetupPanel();
         feedback = addText(root, feedbackMessage, 13, GREEN, false, 0);
@@ -608,7 +620,6 @@ public class MainActivity extends Activity {
 
     @Override protected void onSaveInstanceState(Bundle state) {
         state.putString("feedbackMessage", feedbackMessage);
-        state.putBoolean("historyExpanded", historyExpanded);
         state.putStringArrayList("expandedGroups", new ArrayList<>(expandedGroups));
         state.putBoolean("exportPicking", exportState.picking);
         state.putBoolean("exportBusy", exportState.busy);
@@ -793,15 +804,13 @@ public class MainActivity extends Activity {
         exactButton.setText(exact ? "精确闹钟 · 已开启" : "精确闹钟 · 未开启");
         exactHint.setVisibility(exact ? View.GONE : View.VISIBLE);
         renderNavigation();
-        List<Reminder> items = store.list();
-        ReminderListGroups groups = new ReminderListGroups(items);
         long now = System.currentTimeMillis();
-        boolean hasFired = false;
-        for (Reminder r : items) {
-            hasFired |= r.fired;
-        }
+        int pruned = store.pruneExpired(now);
+        if (pruned > 0) scheduler.rescheduleAll();
+        ReminderListGroups groups = new ReminderListGroups(store.list(), now);
+        List<Reminder> items = new ArrayList<>();
+        for (ReminderGrouping.Group group : groups.active) items.addAll(group.reminders);
         listTitle.setText(groups.title());
-        clearButton.setVisibility(hasFired ? View.VISIBLE : View.GONE);
         String next = ReminderListGroups.signature(items, now) + ReminderImagePresentation.signature(items);
         if (next.equals(listSignature)) return;
         listSignature = next;
@@ -809,13 +818,19 @@ public class MainActivity extends Activity {
         reminders.removeAllViews();
         if (items.isEmpty()) return;
         SimpleDateFormat date = new SimpleDateFormat("yyyy年M月d日 HH:mm:ss", Locale.CHINA);
-        for (ReminderGrouping.Group group : groups.pending) {
+        for (ReminderGrouping.Group group : groups.active) {
             LinearLayout row = card(reminders, 10, Color.WHITE);
             if (group.reminders.size() == 1) {
                 renderReminder(row, group.anchor(), date, now);
                 continue;
             }
-            if (group.due(now)) addText(row, "等待提交通知", 12, GREEN, true, 0);
+            boolean allFired = true, waiting = false;
+            for (Reminder reminder : group.reminders) {
+                allFired &= reminder.fired;
+                waiting |= !reminder.fired && reminder.triggerAt <= now;
+            }
+            if (allFired || waiting) addText(row, allFired ? "已提交通知" : "等待提交通知", 12,
+                    allFired ? MUTED : GREEN, true, 0);
             renderAvatarTime(row, group.anchor(), ReminderImagePresentation.plateRef(group.reminders),
                     ReminderListGroups.summary(group), "最早成熟");
             LinearLayout details = column();
@@ -837,19 +852,6 @@ public class MainActivity extends Activity {
                 details.setVisibility(open ? View.VISIBLE : View.GONE);
                 toggle.setText(open ? "收起明细" : "查看明细");
                 toggle.setContentDescription((open ? "收起 " : "查看 ") + group.reminders.size() + " 条提醒明细");
-            });
-        }
-        if (!groups.history.isEmpty()) {
-            Button toggle = button(reminders, "历史记录 · " + groups.history.size() + " 条 · "
-                    + (historyExpanded ? "收起" : "展开"), false, 16, () -> {});
-            LinearLayout history = column();
-            reminders.addView(history);
-            history.setVisibility(historyExpanded ? View.VISIBLE : View.GONE);
-            for (Reminder r : groups.history) renderReminder(card(history, 10, Color.WHITE), r, date, now);
-            toggle.setOnClickListener(v -> {
-                historyExpanded = !historyExpanded;
-                history.setVisibility(historyExpanded ? View.VISIBLE : View.GONE);
-                toggle.setText("历史记录 · " + groups.history.size() + " 条 · " + (historyExpanded ? "收起" : "展开"));
             });
         }
     }

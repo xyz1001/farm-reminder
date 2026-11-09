@@ -38,8 +38,8 @@ final class ReminderNotifier {
 
         Intent wechat = context.getPackageManager().getLaunchIntentForPackage("com.tencent.mm");
         Intent app = new Intent(context, MainActivity.class)
-                .setAction("com.local.farmreminder.OPEN_REMINDER_APP")
-                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
+                .setAction(MainActivity.ACTION_SHOW_REMINDERS)
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
         if (wechat != null) wechat.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         EnumMap<ReminderNotificationActions.Target, PendingIntent> actions = new EnumMap<>(ReminderNotificationActions.Target.class);
         for (ReminderNotificationActions.Target target : ReminderNotificationActions.available(wechat != null)) {

@@ -65,9 +65,10 @@ public class AlarmScheduler {
     void rescheduleAfterExactGrant() { if (canScheduleExact()) rescheduleAll(true); }
     private void rescheduleAll(boolean forceGrant) { synchronized (ReminderStore.LOCK) {
         ReminderStore store = new ReminderStore(context);
-        if (!store.ready()) return;
+        if (store.pruneExpired(System.currentTimeMillis()) < 0) return;
+        List<Reminder> items;
+        try { items = store.readStrict(); } catch (Exception e) { return; }
         PLAN.capability(canScheduleExact(), forceGrant);
-        List<Reminder> items = store.list();
         List<ReminderGrouping.Group> groups = ReminderGrouping.plan(items);
         SharedPreferences prefs = context.getSharedPreferences("group_alarms", Context.MODE_PRIVATE);
         for (Reminder r : items) cancel(r.id);

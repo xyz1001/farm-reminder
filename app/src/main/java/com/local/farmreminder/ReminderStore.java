@@ -2,6 +2,8 @@ package com.local.farmreminder;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.os.SystemClock;
+import android.util.Log;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.util.ArrayList;
@@ -11,6 +13,8 @@ import java.util.UUID;
 public class ReminderStore {
     static final Object LOCK = new Object();
     private static final FrameCommitPolicy.Durability DURABILITY = new FrameCommitPolicy.Durability();
+    // Guarded by LOCK; bound repeated tick failures independently for each fixed stage.
+    private static final long[] RETENTION_LOG_AT = {-1, -1, -1};
     private static final String RECEIPTS = "frameReceipts", CHECKPOINT = "frameCheckpoint";
     private final Context context;
     private final SharedPreferences prefs;
@@ -23,7 +27,7 @@ public class ReminderStore {
     }
     private boolean repairIfDirty() { return !DURABILITY.dirty || commit(prefs.edit()); }
     public List<Reminder> list() { synchronized (LOCK) { try { return readStrict(); } catch (Exception e) { return new ArrayList<>(); } } }
-    private List<Reminder> readStrict() throws Exception {
+    List<Reminder> readStrict() throws Exception {
         List<Reminder> result = new ArrayList<>();
         JSONArray a = new JSONArray(prefs.getString("items", "[]"));
         for (int i = 0; i < a.length(); i++) {
@@ -47,6 +51,20 @@ public class ReminderStore {
         return a.toString();
     }
     private boolean write(List<Reminder> items) throws Exception { return commit(prefs.edit().putString("items", serialize(items))); }
+    public int pruneExpired(long now) { synchronized (LOCK) {
+        return ReminderRetentionPolicy.prune(new ReminderRetentionPolicy.Storage() {
+            public boolean repair() { return repairIfDirty(); }
+            public List<Reminder> read() throws Exception { return readStrict(); }
+            public boolean write(List<Reminder> items) throws Exception { return ReminderStore.this.write(items); }
+            public void failure(String stage, Throwable cause) {
+                int index = stage.equals("REPAIR_FAILED") ? 0 : stage.equals("READ_FAILED") ? 1 : 2;
+                long now = SystemClock.elapsedRealtime();
+                if (RETENTION_LOG_AT[index] >= 0 && now - RETENTION_LOG_AT[index] < 60_000L) return;
+                RETENTION_LOG_AT[index] = now;
+                Log.w("FarmRetention", stage + " " + (cause == null ? "none" : cause.getClass().getName()));
+            }
+        }, now);
+    } }
     public void delete(String id) { synchronized (LOCK) { try {
         if (!repairIfDirty()) return; List<Reminder> items = readStrict(); items.removeIf(r -> r.id.equals(id));
         if (write(items)) { new AlarmScheduler(context).cancel(id); new AlarmScheduler(context).rescheduleAll(); }

@@ -114,11 +114,11 @@ public class ReminderImagePresentationTest {
         assertTrue(bytes <= 12L * 1024 * 1024);
     }
 
-    @Test public void selectionAndSignatureUseExplicitPendingPlateNotPortraitOrNames() {
+    @Test public void selectionAndSignatureUseDisplayPlateIncludingFiredNotPortraitOrNames() {
         Reminder a=record("a",1000), b=record("b",1001), fired=record("f",900);
         a.avatarRef="a".repeat(64); a.plateRef="../invalid";
         b.plateRef="b".repeat(64); fired.plateRef="f".repeat(64); fired.fired=true;
-        assertEquals(b.plateRef,ReminderImagePresentation.plateRef(Arrays.asList(b,fired,a)));
+        assertEquals(fired.plateRef,ReminderImagePresentation.plateRef(Arrays.asList(b,fired,a)));
         String before=ReminderImagePresentation.signature(Arrays.asList(a,b));
         a.plateRef="c".repeat(64); assertNotEquals(before,ReminderImagePresentation.signature(Arrays.asList(a,b)));
         assertEquals(a.plateRef,ReminderImagePresentation.plateRef(Arrays.asList(b,a)));

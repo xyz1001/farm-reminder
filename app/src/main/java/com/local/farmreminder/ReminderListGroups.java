@@ -4,19 +4,20 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
-/** Read-only list presentation; pending partitions always come from the alarm planner. */
+/** Read-only display partitions; delivery state never hides an unexpired reminder. */
 final class ReminderListGroups {
-    final List<ReminderGrouping.Group> pending;
-    final List<Reminder> history;
+    final List<ReminderGrouping.Group> active;
 
-    ReminderListGroups(List<Reminder> records) {
-        pending = ReminderGrouping.plan(records);
-        history = new ArrayList<>();
-        for (Reminder reminder : records) if (reminder.fired) history.add(reminder);
-        history.sort(Comparator.comparingLong((Reminder r) -> r.matureAt).thenComparing(r -> r.id));
+    ReminderListGroups(List<Reminder> records, long now) {
+        List<Reminder> visible = new ArrayList<>();
+        for (Reminder reminder : records)
+            if (!ReminderRetentionPolicy.isExpired(reminder, now)) visible.add(reminder);
+        active = new ArrayList<>();
+        for (List<Reminder> partition : MaturityIdentity.partition(visible))
+            active.add(new ReminderGrouping.Group(partition));
     }
 
-    String title() { return "待提醒 " + pending.size() + " 组"; }
+    String title() { return "提醒 " + active.size() + " 组"; }
 
     static String summary(ReminderGrouping.Group group) {
         return group.reminders.size() + " 条提醒";
@@ -36,11 +37,12 @@ final class ReminderListGroups {
     static String signature(List<Reminder> records, long now) {
         StringBuilder out = new StringBuilder();
         for (Reminder r : records) {
+            if (ReminderRetentionPolicy.isExpired(r, now)) continue;
             append(out, r.id); append(out, r.avatarRef);
             out.append(r.matureAt).append('|').append(r.triggerAt).append('|')
                     .append(r.fired).append('|').append(r.triggerAt <= now).append(';');
         }
-        return records.isEmpty() ? "empty" : out.toString();
+        return out.length() == 0 ? "empty" : out.toString();
     }
 
     private static void append(StringBuilder out, String value) {

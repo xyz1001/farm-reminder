@@ -16,7 +16,7 @@ final class ReminderImagePresentation {
         ordered.sort(Comparator.comparingLong((Reminder r) -> r.matureAt).thenComparing(r -> r.id));
         for (Reminder r : ordered) {
             String ref = NameplateRefPolicy.normalize(r.plateRef);
-            if (!r.fired && !ref.isEmpty()) return ref;
+            if (!ref.isEmpty()) return ref;
         }
         return "";
     }

@@ -122,6 +122,11 @@ public class MonitorForegroundService extends Service {
             if (!MonitorRuntimePolicy.modeMatches(state, shizuku)) {
                 onMonitorFailure(revision, MonitorCoordinator.Reason.SOURCE_CHANGED); return;
             }
+            // Storage or alarm errors must not turn retention into a monitoring failure.
+            try {
+                if (new ReminderStore(MonitorForegroundService.this).pruneExpired(System.currentTimeMillis()) > 0)
+                    new AlarmScheduler(MonitorForegroundService.this).rescheduleAll();
+            } catch (RuntimeException ignored) { }
             boolean ready = false;
             MonitorCoordinator.Reason wait = MonitorCoordinator.Reason.ACCESSIBILITY;
             if (shizuku) {
