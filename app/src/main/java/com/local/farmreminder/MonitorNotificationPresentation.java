@@ -9,15 +9,16 @@ final class MonitorNotificationPresentation {
     }
 
     static String content(OcrProgress progress, String currentReason, ContainerCapturePolicy.CaptureIssue issue) {
-        // processed counts completed OCR attempts, not successful recognition or new reminders.
-        long processed = progress == null ? 0 : Math.max(0, progress.processed);
+        // queued excludes the in-flight frame; keep the existing pending-count meaning.
         int queued = progress == null ? 0 : Math.max(0, progress.queued);
-        String text = "已处理 " + processed + " 张 · 待处理 " + queued + " 张";
-        if (progress != null && progress.recognizing) text += " · 识别中";
+        boolean processing = progress != null
+                && (progress.recognizing || progress.writing || progress.hasUnsavedCapture || queued > 0);
+        String text = processing ? "待处理 " + queued + " 张" : "";
         String error = shortError(currentReason);
         if (error.isEmpty()) error = shortCaptureIssue(issue);
         if (error.isEmpty() && progress != null) error = shortError(progress.pauseReason);
-        return error.isEmpty() ? text : text + " · " + error;
+        if (error.isEmpty()) return text;
+        return text.isEmpty() ? error : text + " · " + error;
     }
 
     private static String shortCaptureIssue(ContainerCapturePolicy.CaptureIssue issue) {
