@@ -33,11 +33,18 @@ final class NotificationOcrLease {
     private final Gate gate;
     private final Runnable cleanup;
     private Probe probe;
-    private boolean nativeDone, consumerDone, scheduled, cleaning;
+    private boolean nativeDone = true, consumerDone, scheduled, cleaning;
+    private long generation;
 
     private NotificationOcrLease(Gate gate, Runnable cleanup) { this.gate = gate; this.cleanup = cleanup; }
-    void setProbe(Probe probe) { synchronized (gate) { this.probe = probe; } }
-    void nativeDone() { synchronized (gate) { nativeDone = true; } schedule(); }
+    long beginTask() {
+        synchronized (gate) {
+            if (consumerDone || !nativeDone || cleaning) throw new IllegalStateException("task still active");
+            nativeDone = false; probe = null; return ++generation;
+        }
+    }
+    void setProbe(long token, Probe probe) { synchronized (gate) { if (token == generation && !nativeDone) this.probe = probe; } }
+    void nativeDone(long token) { synchronized (gate) { if (token != generation) return; nativeDone = true; } schedule(); }
     void consumerDone() { synchronized (gate) { consumerDone = true; } schedule(); }
 
     private void schedule() {
@@ -53,16 +60,18 @@ final class NotificationOcrLease {
     }
     private void maintain() {
         Probe check;
+        long token;
         synchronized (gate) {
             if (gate.active != this) return;
             check = !nativeDone && consumerDone ? probe : null;
+            token = generation;
         }
         boolean complete = false;
         if (check != null) {
             try { complete = check.complete(); } catch (RuntimeException | Error ignored) { }
         }
         synchronized (gate) {
-            if (complete) nativeDone = true;
+            if (complete && token == generation) nativeDone = true;
             if (!nativeDone || !consumerDone) { scheduled = false; return; }
             cleaning = true;
         }

@@ -6,24 +6,27 @@ import java.util.Set;
 
 /** Optional notification-only text; never persisted and never derived from Reminder.friend. */
 public final class NotificationIdentityLabel {
-    public static final NotificationIdentityLabel EMPTY = new NotificationIdentityLabel("");
+    public static final NotificationIdentityLabel EMPTY = new NotificationIdentityLabel("", null);
     private static final Set<String> UI_TEXT = new HashSet<>(Arrays.asList(
             "好友", "回家", "分享", "商城", "仓库", "商店", "宠物", "图鉴", "装扮", "一键务农",
             "经验", "收入", "金币", "加载中", "登录", "微信登录", "授权登录", "同意", "取消",
             "成熟", "农场", "QQ经典农场", "昵称未识别", "头像未定位"));
-    private final String value;
+    private final String name;
+    private final Integer level;
 
-    private NotificationIdentityLabel(String value) { this.value = value; }
+    private NotificationIdentityLabel(String name, Integer level) { this.name = name; this.level = level; }
 
     public static NotificationIdentityLabel of(String name, Integer level) {
         String safe = safeName(name);
         if (level != null && level > 0 && level <= 9999) {
-            return new NotificationIdentityLabel((safe.isEmpty() ? "好友" : safe) + "(" + level + "级)");
+            return new NotificationIdentityLabel(safe, level);
         }
-        return safe.isEmpty() ? EMPTY : new NotificationIdentityLabel(safe);
+        return safe.isEmpty() ? EMPTY : new NotificationIdentityLabel(safe, null);
     }
 
-    public String text() { return value; }
+    public String text() { return level == null ? name : (name.isEmpty() ? "好友" : name) + "(" + level + "级)"; }
+    boolean hasLevel() { return level != null; }
+    NotificationIdentityLabel withLevel(int value) { return hasLevel() ? this : of(name, value); }
 
     static String safeName(String name) {
         if (name == null || name.length() > 512) return "";

@@ -102,6 +102,7 @@ public final class FixtureOcrInstrumentation extends Instrumentation {
             File dir = new File(getTargetContext().getFilesDir(), "test-cache-replay/" + SystemClock.elapsedRealtimeNanos());
             if (!dir.mkdirs()) throw new IllegalStateException("output directory");
             output.append("outputDir=files/test-cache-replay/").append(dir.getName()).append('\n');
+            output.append("badgeProbeEnabled=").append("true".equals(args.getString("badgeProbe"))).append('\n');
             recognizer = TextRecognition.getClient(new ChineseTextRecognizerOptions.Builder().build());
             for (int i = 1; i <= 5; i++) {
                 String id = String.format(java.util.Locale.ROOT, "sample-%02d", i);
@@ -202,7 +203,84 @@ public final class FixtureOcrInstrumentation extends Instrumentation {
                     .append(portrait == null ? "none" : rect(portrait.left, portrait.top, portrait.right, portrait.bottom))
                     .append(" visualHeader=").append(plate != null).append(" plateStorable=").append(plateStorable).append(" plateRect=")
                     .append(plate == null ? "none" : rect(plate.left, plate.top, plate.right, plate.bottom)).append('\n');
+            appendLevelDiagnostics(output, id, rows, strict, w, h, completeBadge);
+            if ("true".equals(args.getString("badgeProbe")))
+                probeBadge(output, id, working);
         } finally { if (working != null && working != bitmap) working.recycle(); bitmap.recycle(); }
+    }
+
+    /** Replays the complete production identity pipeline with an owned working bitmap. */
+    private static void probeBadge(StringBuilder output, String id, Bitmap working) {
+        Bitmap owned = working.copy(Bitmap.Config.ARGB_8888, false);
+        if (owned == null) throw new IllegalStateException("bitmap copy");
+        long start = SystemClock.elapsedRealtime();
+        NotificationIdentityLabel label = NotificationIdentityOcr.readBitmap(owned, start + 2250);
+        String text = label.text();
+        java.util.regex.Matcher match = java.util.regex.Pattern.compile("\\(([0-9]+)级\\)$").matcher(text);
+        boolean level = match.find();
+        output.append(id).append(" badgeProbe productionReadBitmap=true levelAvailable=").append(level)
+                .append(" level=").append(level ? match.group(1) : "none")
+                .append(" elapsedMs=").append(SystemClock.elapsedRealtime() - start).append('\n');
+    }
+    private static void appendLevelDiagnostics(StringBuilder output, String id,
+            List<NotificationIdentityParser.TextRow> rows, AvatarLocator.Bounds avatar,
+            int width, int height, boolean completeBadge) {
+        // Test-only reproduction of parseRows' private Region formula; retain doubles (no rounding).
+        double left = 0, top = 0, right = 0, bottom = 0;
+        if (avatar != null) {
+            double d = (double) avatar.right - avatar.left;
+            left = avatar.left + .68 * d; top = avatar.top + .44 * d;
+            right = avatar.left + 1.20 * d; bottom = avatar.top + .88 * d;
+        }
+        output.append(id).append(" diagnosticLevel badgeRect=")
+                .append(avatar == null ? "none" : left + "," + top + "," + right + "," + bottom)
+                .append(" strictAvatarRect=")
+                .append(avatar == null ? "none" : rect(avatar.left, avatar.top, avatar.right, avatar.bottom))
+                .append(" completeBadge=").append(completeBadge).append('\n');
+        int rowCount = 0, elementCount = 0, omittedRows = 0, omittedElements = 0;
+        for (NotificationIdentityParser.TextRow row : rows) {
+            if (!headerIntersects(row.line, width, height)) continue;
+            if (rowCount >= 20) { omittedRows++; continue; }
+            int rowId = rowCount++;
+            appendLevelLine(output, id, "parent", rowId, -1, row.line, avatar != null,
+                    left, top, right, bottom);
+            output.append(" children=").append(row.elements.size()).append('\n');
+            for (int i = 0; i < row.elements.size(); i++) {
+                OcrLine child = row.elements.get(i);
+                if (!headerIntersects(child, width, height) || elementCount >= 80) { omittedElements++; continue; }
+                elementCount++;
+                appendLevelLine(output, id, "child", rowId, i, child, avatar != null,
+                        left, top, right, bottom);
+                output.append('\n');
+            }
+        }
+        output.append(id).append(" diagnosticLevel omittedRows=").append(omittedRows)
+                .append(" omittedElements=").append(omittedElements).append('\n');
+    }
+
+    private static boolean headerIntersects(OcrLine line, int width, int height) {
+        return line.left < .40 * width && line.top < .16 * height && line.right > 0 && line.bottom > 0;
+    }
+
+    private static void appendLevelLine(StringBuilder output, String id, String kind, int row, int child,
+            OcrLine line, boolean hasBadge, double left, double top, double right, double bottom) {
+        output.append(id).append(" diagnosticLevel ").append(kind).append(" row=").append(row);
+        if (child >= 0) output.append(" child=").append(child);
+        output.append(" rect=").append(rect(line.left, line.top, line.right, line.bottom))
+                .append(" whollyInBadge=").append(hasBadge && line.left >= left && line.top >= top
+                        && line.right <= right && line.bottom <= bottom)
+                .append(" text=").append(redactLevelText(line.text));
+    }
+
+    private static String redactLevelText(String text) {
+        StringBuilder safe = new StringBuilder();
+        int end = Math.min(text.length(), 256);
+        for (int i = 0; i < end; i++) {
+            char c = text.charAt(i);
+            safe.append(c >= '0' && c <= '9' || c == '/' || c == ':' || c == '万' || c == '亿' || c == '级' ? c : '?');
+        }
+        if (text.length() > end) safe.append("...");
+        return safe.toString();
     }
 
     // NameplateStore uses floor for left/top and ceil for right/bottom.
