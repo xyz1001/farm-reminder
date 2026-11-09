@@ -11,6 +11,7 @@ sdk/
 *.keystore
 *.pem
 *.key
+*.pk8
 .env
 .env.*
 .slim/deepwork/

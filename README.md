@@ -124,6 +124,18 @@ Shizuku 系统任务模式已实现，仍待验收。本轮不进行真机、ADB
 
 需要 JDK 17、Android SDK 35、Gradle 8.11.1。配置本机 `local.properties` 或 `ANDROID_HOME`，运行 `gradle :app:assembleDebug` 和 `gradle :app:testDebugUnitTest`，也可使用仓库提供的 Gradle wrapper。不要提交 local.properties、构建产物或用户数据。
 
+### 本地签名
+
+本项目的独立签名采用**未加密的 PKCS#8 DER 私钥**（`.pk8`）及 X.509 证书（`.pem`），不使用口令或 DPAPI；对应的未加密私钥 PEM 可供本地备份。密钥必须放在仓库外，并限制文件访问权限；不要提交、公开分享或随 APK 发布私钥。更换电脑时应迁移同一套密钥，不要重新生成后误当作可直接覆盖旧签名的更新。
+
+构建完成后，用现有 JDK 和 SDK 签名工具执行：
+
+```powershell
+pwsh -NoProfile -File scripts/Sign-Apk.ps1 -KeyFile "<仓库外密钥目录>/farm-reminder.pk8" -CertFile "<仓库外密钥目录>/farm-reminder.x509.pem" -SdkRoot "<已安装的 Android SDK 目录>"
+```
+
+产物为 `app/build/outputs/apk/debug/app-debug-signed.apk`；脚本会核对 `signing-certificate.sha256` 中的公开证书指纹，不覆盖原始构建 APK。后续更新应使用此固定签名产物。若证书不一致，不自动卸载或清除用户数据。GitHub CI 的远端工作流与 Secrets 尚未配置或替换。
+
 ### 私有截图的无界面 OCR 回放
 
 仅在用户授权后，将待测截图命名为 `farm-friend-readonly.png` 或 `farm-current-readonly.png` 放入仓库外的独立目录（目录中不要放其他文件），以 `gradle :app:assembleDebugAndroidTest -PocrFixtureDir=<目录>` 打包测试 APK。测试 APK 包含完整私有截图，不可提交或分享。只安装测试 APK 后，运行 `adb shell am instrument -w -e fixture friend -e mode baseline com.local.farmreminder.test/com.local.farmreminder.FixtureOcrInstrumentation`；`fixture` 可选 `friend` / `current`，`mode` 可选 `baseline` / `roi`。每次输出冷启动、两次预热后五次热运行的预处理、OCR 和二者之和中位数，及每次成熟解析、好友确认布尔值和输入像素数；不输出昵称。可选 `-e left <左> -e top <上> -e right <右> -e bottom <下>` 输出截图坐标范围内行和元素的位置及仅保留数字、冒号和“后成熟”的脱敏文本。普通单元测试和构建不需要截图。
