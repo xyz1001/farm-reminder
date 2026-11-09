@@ -125,6 +125,31 @@
 
 ---
 
+## 📦 自动构建与发布
+
+- 推送分支、创建或更新 PR，以及在 Actions 中手动运行工作流时，自动执行单元测试、Debug 构建和 Lint；APK 和检查报告可在该次运行的 Artifacts 中下载。
+- **推送任意 tag 后自动发布 GitHub Release**：检查通过后，使用固定证书重新签名 APK，校验证书指纹，并上传安装包和 SHA-256 校验文件。沿用当前本地构建方式，发布的是重新签名的 **Debug APK**，不是 Release 构建。普通 CI 的 APK 使用临时 Debug 证书，不适合用于覆盖安装正式发布版本。
+- 首次发布前，在仓库 **Settings → Secrets and variables → Actions** 添加以下 Repository secrets（文件原始字节的 Base64）：
+
+  | Secret | 内容 |
+  | --- | --- |
+  | `ANDROID_SIGNING_KEY_BASE64` | 现有未加密 PKCS#8 私钥（`.pk8`） |
+  | `ANDROID_SIGNING_CERT_BASE64` | 对应 X.509 证书（`.x509.pem`） |
+
+  可用 PowerShell 将文件编码并复制到剪贴板（分别处理密钥和证书，不要将输出提交到仓库）：
+  ```powershell
+  [Convert]::ToBase64String([IO.File]::ReadAllBytes('<文件路径>')) | Set-Clipboard
+  ```
+  必须沿用现有签名身份，证书的 SHA-256 指纹应与 `signing-certificate.sha256` 一致；缺少密钥或指纹不匹配会阻止发布。签名材料不会提供给 PR 构建。请限制 tag 推送权限，勿将密钥或编码后的内容写入源码、日志或 Issue。
+- 发布前手动更新 `app/build.gradle` 中的 `versionName` 与递增的 `versionCode`；tag 不会自动修改 APK 内部版本。提交并推送代码后，按以下示例创建新 tag（这些命令会实际触发远程发布，请按需手动执行）：
+  ```bash
+  git tag v1.0.1
+  git push origin v1.0.1
+  ```
+- 工作流使用仓库自带的 `GITHUB_TOKEN` 创建 Release，无需额外配置个人访问令牌；组织或仓库策略需允许工作流写入仓库内容。首次远程运行仍需在 GitHub Actions 中确认构建、签名和发布结果。
+
+---
+
 ## ☕ 赞赏支持
 
 如果这款轻量安全的「农场提醒」为你的偷菜日常省下了心力，欢迎扫描下方赞赏码，请作者喝一杯清茶！你的支持是持续维护与优化的动力。
@@ -133,4 +158,3 @@
   <img src="app/src/main/res/raw/support_qr.png" width="220" alt="赞赏码" />
   <p><em>微信扫一扫 · 自愿支持</em></p>
 </div>
-
