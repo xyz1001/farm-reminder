@@ -328,6 +328,8 @@ public final class DurableFrameEngine {
             if (!outcome.committed) { fail(frame, "BUSINESS_FAILED", token, true); return; }
             try { new AlarmScheduler(context).rescheduleAll(); } catch (RuntimeException ignored) { }
             store.acknowledge(frame);
+            if (SupportPromptPolicy.recognitionQualifies(outcome.committed, outcome.replay, outcome.confirmed))
+                SupportPromptStore.recordRecognition(context);
             reminders.forgetFrameReceipt(frame.id);
             store.discardFinalized(frame);
             main.post(() -> { if (fence.valid(token)) { Listener l = listener; if (l != null) l.onFrameResult(frame, lines, outcome, token); } });

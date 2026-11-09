@@ -5,9 +5,12 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.NotificationManager;
 import android.content.ActivityNotFoundException;
+import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -27,6 +30,7 @@ import android.widget.RadioGroup;
 import android.widget.ScrollView;
 import android.widget.Switch;
 import android.widget.TextView;
+import android.widget.Toast;
 import java.lang.ref.WeakReference;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -41,6 +45,7 @@ public class MainActivity extends Activity {
     public static final String ACTION_SHOW_REMINDERS = "com.local.farmreminder.SHOW_REMINDERS";
     private static final int NOTIFICATIONS = 102;
     private static final int EXPORT_DIAGNOSTICS = 103;
+    private static final int SUPPORT_STORAGE = 104;
     private static final int INK = 0xFF20382D, GREEN = 0xFF276344;
     private static final int MUTED = 0xFF657367, PAPER = 0xFFF7F6EF;
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -52,6 +57,9 @@ public class MainActivity extends Activity {
     private boolean updatingMode;
     private Button monitorButton, notificationButton, exactButton;
     private Button exportButton;
+    private Button supportButton;
+    private AlertDialog activeDialog;
+    private boolean supportPermissionPending, supportSaveAfterResume;
     private TextView exportStatus;
     private TextView vibrationStatus, vibrationHint;
     private ExportState exportState;
@@ -134,7 +142,10 @@ public class MainActivity extends Activity {
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
-        if (showRemindersIfRequested(intent)) refresh();
+        if (showRemindersIfRequested(intent)) {
+            refresh();
+            onAssistantPageEntry();
+        }
     }
 
     private boolean showRemindersIfRequested(Intent intent) {
@@ -243,10 +254,14 @@ public class MainActivity extends Activity {
         addText(export, "开启后保留截图，用于排查和导出；关闭后，截图在识别完成后自动删除。", 12, MUTED, false, 4);
         addText(export, "仅对新截图生效，已保留的截图不受影响。", 12, MUTED, false, 4);
         exportButton = button(export, "导出 ZIP", false, 12, () ->
-                new AlertDialog.Builder(this).setTitle("导出诊断包？")
+                showTrackedDialog(new AlertDialog.Builder(this).setTitle("导出诊断包？")
                         .setMessage("包含保留的整屏截图与识别记录，可能含其他页面或敏感内容。请选择可信的保存位置。")
-                        .setNegativeButton("取消", null).setPositiveButton("选择位置", (d, w) -> requestDiagnosticsExport()).show());
+                        .setNegativeButton("取消", null).setPositiveButton("选择位置", (d, w) -> requestDiagnosticsExport())));
         exportStatus = addText(export, "", 12, MUTED, false, 8);
+        LinearLayout support = card(settingsPage, 16, Color.WHITE);
+        supportButton = button(support, SupportPromptPresentation.TITLE, false, 0,
+                () -> showSupportDialog(false));
+        addText(support, "自愿支持，不影响监测功能。", 12, MUTED, false, 7);
         buildSetupPanel();
         feedback = addText(root, feedbackMessage, 13, GREEN, false, 0);
         feedback.setPadding(dp(20), dp(10), dp(20), dp(10));
@@ -260,8 +275,11 @@ public class MainActivity extends Activity {
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1);
             lp.setMargins(dp(3), 0, dp(3), 0); navigation.addView(tab, lp);
             tab.setOnClickListener(v -> {
+                String previousPage = currentPage;
+                boolean wasSetup = setupVisible;
                 currentPage = "设置".equals(name) ? "settings" : "home";
                 setupVisible = false; reviewMode = false; backStep = null; refresh(); scroll.smoothScrollTo(0, 0);
+                if (wasSetup || !previousPage.equals(currentPage)) onAssistantPageEntry();
             });
         }
     }
@@ -308,6 +326,110 @@ public class MainActivity extends Activity {
         NotificationSettingsPolicy.Target opened = NotificationSettingsNavigator.open(this);
         if (opened == null) showMessage("无法打开，请在系统设置中找到本应用。");
         else clearFeedback();
+    }
+
+    private boolean dialogShowing() {
+        return activeDialog != null && activeDialog.isShowing();
+    }
+
+    private void showTrackedDialog(AlertDialog.Builder builder) {
+        if (!resumed || isFinishing() || isDestroyed() || dialogShowing()) return;
+        AlertDialog dialog = builder.create();
+        activeDialog = dialog;
+        dialog.setOnDismissListener(d -> {
+            if (activeDialog == dialog) activeDialog = null;
+        });
+        dialog.show();
+    }
+
+    /** Called only at an actual page entry, never by the refresh ticker or recognition callbacks. */
+    private void onAssistantPageEntry() {
+        if (!SupportPageEntryPolicy.canOffer(resumed, isFinishing() || isDestroyed(),
+                SupportPageEntryPolicy.isNormalPage(currentPage), setupVisible, SetupFlowPolicy.requiredReady(setupStep()),
+                dialogShowing(), exportState.supportBusy || supportPermissionPending
+                        || supportSaveAfterResume || exportState.busy || exportState.picking)) return;
+        if (SupportPromptStore.consumeAutomaticPrompt(this, !store.list().isEmpty())) showSupportDialog(true);
+    }
+
+    private void showSupportDialog(boolean automatic) {
+        if (!resumed || isFinishing() || isDestroyed() || dialogShowing()
+                || exportState.supportBusy || supportPermissionPending || supportSaveAfterResume) return;
+        AlertDialog.Builder builder = new AlertDialog.Builder(this)
+                .setTitle(SupportPromptPresentation.TITLE)
+                .setNegativeButton("拒绝", null)
+                .setPositiveButton("同意", (d, w) -> requestSupportSave());
+        if (automatic) {
+            builder.setMessage(SupportPromptPresentation.AUTOMATIC_MESSAGE);
+        } else {
+            ScrollView scroll = new ScrollView(this);
+            LinearLayout content = column();
+            content.setPadding(dp(24), dp(8), dp(24), dp(8));
+            scroll.addView(content);
+            addText(content, SupportPromptPresentation.MANUAL_MESSAGE, 14, INK, false, 0);
+            ImageView qr = new ImageView(this);
+            Bitmap preview = BitmapFactory.decodeResource(getResources(), R.raw.support_qr);
+            qr.setImageBitmap(preview);
+            qr.setAdjustViewBounds(true);
+            qr.setMaxHeight(dp(320));
+            qr.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            qr.setContentDescription("赞赏码，点击同意可保存完整图片到相册");
+            content.addView(qr, spaced(-1, -2, 16));
+            if (preview == null) {
+                qr.setVisibility(View.GONE);
+                addText(content, "赞赏码预览暂不可用，仍可点击同意尝试保存。", 12, MUTED, false, 12);
+            }
+            builder.setView(scroll);
+        }
+        showTrackedDialog(builder);
+        if (dialogShowing() && !automatic) SupportPromptStore.markPromptShown(this);
+    }
+
+    private void requestSupportSave() {
+        if (!resumed || isFinishing() || isDestroyed() || exportState.supportBusy
+                || supportPermissionPending || supportSaveAfterResume) return;
+        if (SupportQrStore.needsLegacyPermission(this)) {
+            supportPermissionPending = true;
+            requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, SUPPORT_STORAGE);
+        } else saveSupportQr();
+    }
+
+    private void renderSupportState() {
+        supportButton.setEnabled(!exportState.supportBusy && !supportPermissionPending && !supportSaveAfterResume);
+        supportButton.setText(exportState.supportBusy ? "正在保存赞赏码…" : SupportPromptPresentation.TITLE);
+    }
+
+    private void saveSupportQr() {
+        if (!resumed || isFinishing() || isDestroyed() || exportState.supportBusy) return;
+        exportState.supportBusy = true;
+        renderSupportState();
+        // Only application context and weak Activity references cross the worker boundary.
+        Context app = getApplicationContext();
+        ExportState state = exportState;
+        WeakReference<MainActivity> origin = new WeakReference<>(this);
+        new Thread(() -> runSupportSave(app, state, origin), "support-qr-save").start();
+    }
+
+    private static void runSupportSave(Context app, ExportState state, WeakReference<MainActivity> origin) {
+        boolean saved;
+        try { saved = SupportQrStore.save(app) != null; }
+        catch (java.io.IOException | RuntimeException e) { saved = false; }
+        final boolean completed = saved;
+        new Handler(Looper.getMainLooper()).post(() -> {
+            state.supportBusy = false;
+            MainActivity current = state.activity.get();
+            if (current == null || current.isFinishing() || current.isDestroyed()) return;
+            current.renderSupportState();
+            if (!completed) {
+                current.showMessage(SupportPromptPresentation.NOT_SAVED);
+                return;
+            }
+            current.showMessage(SupportPromptPresentation.SAVED);
+            if (!SupportPageEntryPolicy.canOpenWeChat(current.resumed,
+                    current.isFinishing() || current.isDestroyed(), origin.get() == current)) return;
+            Toast.makeText(current, SupportPromptPresentation.SAVED, Toast.LENGTH_LONG).show();
+            if (!WeChatSupportNavigator.open(current))
+                current.showMessage(SupportPromptPresentation.WECHAT_UNAVAILABLE);
+        });
     }
 
     private void requestMonitoring() {
@@ -441,6 +563,7 @@ public class MainActivity extends Activity {
     }
 
     private void performSetupAction() {
+        boolean wasSetup = setupVisible;
         SetupFlowPolicy.Step step = displayedStep;
         clearFeedback();
         backStep = null;
@@ -460,9 +583,12 @@ public class MainActivity extends Activity {
                 setupVisible = false; currentPage = SetupFlowPolicy.pageAfterClosingSetup(step, currentPage); reviewMode = false;
         }
         refresh();
+        if (wasSetup && !setupVisible) onAssistantPageEntry();
     }
 
     private void navigateBack() {
+        String previousPage = currentPage;
+        boolean wasSetup = setupVisible;
         if (setupVisible) {
             if (displayedStep == SetupFlowPolicy.Step.MODE || displayedStep == SetupFlowPolicy.Step.UNSUPPORTED) {
                 currentPage = SetupFlowPolicy.pageAfterClosingSetup(displayedStep, currentPage);
@@ -477,6 +603,7 @@ public class MainActivity extends Activity {
         } else { currentPage = "home"; }
         clearFeedback();
         refresh();
+        if (!setupVisible && (wasSetup || !previousPage.equals(currentPage))) onAssistantPageEntry();
     }
 
     @Override public void onBackPressed() {
@@ -556,6 +683,7 @@ public class MainActivity extends Activity {
         private WeakReference<MainActivity> activity = new WeakReference<>(null);
         private boolean busy, picking;
         private String message = "";
+        private boolean supportBusy;
 
         @Override public void onSuccess(int frameCount) {
             finish("已导出" + frameCount + "张截图及识别记录"
@@ -603,10 +731,10 @@ public class MainActivity extends Activity {
                     .putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName()));
             return;
         }
-        new AlertDialog.Builder(this).setTitle("开启通知")
+        showTrackedDialog(new AlertDialog.Builder(this).setTitle("开启通知")
                 .setMessage("用于成熟提醒；不开启仍可监测。")
                 .setNegativeButton("稍后", null)
-                .setPositiveButton("继续", (d, w) -> requestNotificationPermission()).show();
+                .setPositiveButton("继续", (d, w) -> requestNotificationPermission()));
     }
 
     private void requestNotificationPermission() {
@@ -626,6 +754,16 @@ public class MainActivity extends Activity {
 
     @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(requestCode, permissions, results);
+        if (requestCode == SUPPORT_STORAGE) {
+            boolean userRequested = supportPermissionPending;
+            supportPermissionPending = false;
+            if (!userRequested) return;
+            if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) {
+                if (resumed) saveSupportQr();
+                else supportSaveAfterResume = true;
+            } else showMessage(SupportPromptPresentation.NOT_SAVED);
+            return;
+        }
         if (requestCode != NOTIFICATIONS) return;
         if (results.length == 0) showMessage("已取消通知授权，可稍后在设置中开启。");
         else if (!notificationsAllowed()) showMessage("通知未开启，识别仍可使用；提醒通知和振动可能受限。");
@@ -671,6 +809,12 @@ public class MainActivity extends Activity {
         try { scheduler.rescheduleAll(); }
         catch (RuntimeException e) { showMessage("部分提醒未能重新安排，请检查权限。"); }
         handler.removeCallbacks(ticker);
+        renderNavigation();
+        renderSupportState();
+        if (supportSaveAfterResume) {
+            supportSaveAfterResume = false;
+            saveSupportQr();
+        } else onAssistantPageEntry();
         ticker.run();
     }
 
@@ -685,6 +829,7 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 33 && backCallback != null)
             getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(backCallback);
         if (exportState.activity.get() == this) exportState.activity.clear();
+        if (activeDialog != null) activeDialog.dismiss();
         handler.removeCallbacksAndMessages(null);
         super.onDestroy();
     }
@@ -809,12 +954,12 @@ public class MainActivity extends Activity {
                 r.fired ? MUTED : GREEN, true, 0);
         renderAvatarTime(row, r, r.plateRef, "", "成熟");
         addText(row, ScreenPresentation.schedule(r.matureAt, r.triggerAt), 12, MUTED, false, 5);
-        Button delete = button(row, "删除", false, 10, () -> new AlertDialog.Builder(this)
+        Button delete = button(row, "删除", false, 10, () -> showTrackedDialog(new AlertDialog.Builder(this)
                 .setTitle("删除提醒？").setMessage("成熟时间：" + date.format(new Date(r.matureAt))
                         + "\n仅删除这条记录，未触发的提醒将取消。")
                 .setNegativeButton("保留", null).setPositiveButton("删除", (d, w) -> {
                     store.delete(r.id); refresh();
-                }).show());
+                })));
         delete.setContentDescription("删除 " + date.format(new Date(r.matureAt)) + " 成熟的提醒");
     }
 
