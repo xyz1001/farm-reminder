@@ -30,7 +30,6 @@ import android.widget.RadioGroup;
 import android.widget.ScrollView;
 import android.widget.Switch;
 import android.widget.TextView;
-import android.widget.Toast;
 import java.lang.ref.WeakReference;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -426,7 +425,6 @@ public class MainActivity extends Activity {
             current.showMessage(SupportPromptPresentation.SAVED);
             if (!SupportPageEntryPolicy.canOpenWeChat(current.resumed,
                     current.isFinishing() || current.isDestroyed(), origin.get() == current)) return;
-            Toast.makeText(current, SupportPromptPresentation.SAVED, Toast.LENGTH_LONG).show();
             if (!WeChatSupportNavigator.open(current))
                 current.showMessage(SupportPromptPresentation.WECHAT_UNAVAILABLE);
         });
