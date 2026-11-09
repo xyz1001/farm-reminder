@@ -33,5 +33,10 @@ final class SetupFlowPolicy {
         return !running && !serviceActive && !startPending;
     }
 
+    static String pageAfterClosingSetup(Step displayedStep, String currentPage) {
+        // MODE overlays its entry tab; currentPage also survives Activity recreation.
+        return displayedStep == Step.MODE ? currentPage : "home";
+    }
+
     private SetupFlowPolicy() {}
 }

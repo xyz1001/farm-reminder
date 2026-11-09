@@ -464,7 +464,8 @@ public class MainActivity extends Activity {
     private void navigateBack() {
         if (setupVisible) {
             if (displayedStep == SetupFlowPolicy.Step.MODE || displayedStep == SetupFlowPolicy.Step.UNSUPPORTED) {
-                setupVisible = false; reviewMode = false; backStep = null; currentPage = "home";
+                currentPage = SetupFlowPolicy.pageAfterClosingSetup(displayedStep, currentPage);
+                setupVisible = false; reviewMode = false; backStep = null;
             } else if (displayedStep == SetupFlowPolicy.Step.SOURCE) {
                 reviewMode = true; backStep = null;
             } else if (displayedStep == SetupFlowPolicy.Step.WAITING) {

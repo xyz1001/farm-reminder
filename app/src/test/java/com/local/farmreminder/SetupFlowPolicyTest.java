@@ -5,6 +5,35 @@ import static org.junit.Assert.*;
 import static com.local.farmreminder.SetupFlowPolicy.Step.*;
 
 public class SetupFlowPolicyTest {
+    @Test public void settingsModeReviewBackReturnsToSettings() {
+        SetupFlowPolicy.Step displayed = SetupFlowPolicy.displayedStep(READY, true, null);
+        assertEquals(MODE, displayed);
+        assertEquals("settings", SetupFlowPolicy.pageAfterClosingSetup(displayed, "settings"));
+    }
+
+    @Test public void settingsModeReviewBackDoesNotGrantMissingSourcePermission() {
+        SetupFlowPolicy.Step actual = next(true, false, false, false, false, false, false, false);
+        SetupFlowPolicy.Step displayed = SetupFlowPolicy.displayedStep(actual, true, null);
+        assertEquals("settings", SetupFlowPolicy.pageAfterClosingSetup(displayed, "settings"));
+        assertEquals(SOURCE, SetupFlowPolicy.displayedStep(actual, false, null));
+        assertFalse(SetupFlowPolicy.requiredReady(actual));
+    }
+
+    @Test public void firstRunModeBackReturnsHomeWithoutCompletingSetup() {
+        SetupFlowPolicy.Step actual = next(false, false, false, false, false, false, false, false);
+        SetupFlowPolicy.Step displayed = SetupFlowPolicy.displayedStep(actual, true, null);
+        assertEquals(MODE, displayed);
+        assertEquals("home", SetupFlowPolicy.pageAfterClosingSetup(displayed, "home"));
+        assertEquals(MODE, next(false, false, false, false, false, false, false, false));
+        assertEquals(SOURCE, next(true, false, false, false, false, false, false, false));
+        assertFalse(SetupFlowPolicy.requiredReady(actual));
+    }
+
+    @Test public void homeModeReviewAndUnsupportedBackStillReturnHome() {
+        assertEquals("home", SetupFlowPolicy.pageAfterClosingSetup(MODE, "home"));
+        assertEquals("home", SetupFlowPolicy.pageAfterClosingSetup(UNSUPPORTED, "settings"));
+    }
+
     @Test public void firstMissingPermissionStartsWithMode() {
         assertEquals(MODE, next(false, false, false, false, false, false, false, false));
     }
