@@ -8,6 +8,7 @@ import android.os.Handler;
 import android.os.Build;
 import android.os.Looper;
 import android.os.StatFs;
+import android.os.SystemClock;
 import android.net.Uri;
 import android.system.ErrnoException;
 import android.system.Os;
@@ -68,7 +69,8 @@ public final class DurableFrameEngine {
     private TextRecognizer recognizer;
     private long processed, captured;
     private volatile long diagnosticAttempt;
-    private DiskFrameStore.Snapshot snapshot = new DiskFrameStore.Snapshot();
+    private DiskFrameStore.CountSnapshot snapshot;
+    static final PipelineTimings timings = new PipelineTimings();
 
     private DurableFrameEngine(Context context) {
         this.context = context;
@@ -162,7 +164,8 @@ public final class DurableFrameEngine {
             unsavedMetadata.imageFileName = ImageEncodingPolicy.fileName(Build.VERSION.SDK_INT);
             unsavedMetadata.imageHasAlpha = image.hasAlpha(); writing = true;
         }
-        disk.execute(() -> { update(); writeCapture(); });
+        timings.record(PipelineTimings.Event.ENQUEUE, metadata.captureSequence, SystemClock.elapsedRealtime(), SystemClock.uptimeMillis(), 0);
+        disk.execute(() -> { timings.record(PipelineTimings.Event.DISK_ARRIVAL, metadata.captureSequence, SystemClock.elapsedRealtime(), SystemClock.uptimeMillis(), 0); update(); writeCapture(); });
     }
     private static DiskFrameStore.Frame copyMetadata(DiskFrameStore.Frame f) {
         DiskFrameStore.Frame c = new DiskFrameStore.Frame();
@@ -180,6 +183,7 @@ public final class DurableFrameEngine {
             if (!store.reconcilePublication(frame)) store.publish(frame, out -> bitmap.compress(
                     Build.VERSION.SDK_INT >= 30 && "image.webp".equals(frame.imageFileName) ? Bitmap.CompressFormat.WEBP_LOSSLESS : Bitmap.CompressFormat.PNG,
                     ImageEncodingPolicy.quality(Build.VERSION.SDK_INT), out));
+            timings.record(PipelineTimings.Event.PUBLISH_COMPLETE, frame.captureSequence, SystemClock.elapsedRealtime(), SystemClock.uptimeMillis(), 0);
             synchronized (captureLock) { unsaved = null; unsavedMetadata = null; writing = false; writeFailed = false; }
             bitmap.recycle(); captured++;
         } catch (Exception e) { writing = false; writeFailed = true; notifyFrameFailure(frame, "WRITE_FAILED", token); }
@@ -204,7 +208,8 @@ public final class DurableFrameEngine {
         boolean recovered = DurableFrameRecovery.attempt(fence, () -> {
             DiskFrameStore candidate = new DiskFrameStore(root, DurableFrameEngine::syncDirectory, DiskFrameStore.DEFAULT_OPS);
             candidate.recover();
-            DiskFrameStore.Snapshot checked = candidate.scan();
+            candidate.scan();
+            DiskFrameStore.CountSnapshot checked = candidate.counts();
             store = candidate; snapshot = checked;
             try { lowSpace = new StatFs(root.getAbsolutePath()).getAvailableBytes() < RESERVE; }
             catch (RuntimeException e) { lowSpace = true; }
@@ -214,22 +219,23 @@ public final class DurableFrameEngine {
     }
     private void status(String value) { main.post(() -> { Listener l = listener; if (l != null) l.onStatus(value); }); }
     private void scan() throws IOException {
-        snapshot = store.scan();
+        snapshot = store.counts();
         try { lowSpace = new StatFs(root.getAbsolutePath()).getAvailableBytes() < RESERVE; }
         catch (RuntimeException e) { lowSpace = true; }
         update();
     }
     private void update() {
-        int failed = snapshot.failedArtifacts;
-        for (DiskFrameStore.Frame f : snapshot.frames) if (f.state == DiskFrameStore.State.FAILED) failed++;
+        DiskFrameStore.CountSnapshot s = snapshot;
+        int failed = s == null ? 0 : s.failedArtifacts + s.failedFrames;
         boolean hasUnsavedCapture, captureWriting;
         synchronized (captureLock) { hasUnsavedCapture = unsaved != null; captureWriting = writing; }
-        OcrProgress p = new OcrProgress(processed, captured, snapshot.pending, snapshot.pendingBytes,
-                fence.modelActive(), failed, snapshot.cleanupPending, snapshot.retainedBytes, captureWriting, capturePauseReason(),
-                hasUnsavedCapture, snapshot.archivedCount);
+        OcrProgress p = new OcrProgress(processed, captured, s == null ? 0 : s.pending, s == null ? 0 : s.pendingBytes,
+                fence.modelActive(), failed, s == null ? 0 : s.cleanupPending, s == null ? 0 : s.retainedBytes, captureWriting, capturePauseReason(),
+                hasUnsavedCapture, s == null ? 0 : s.archivedCount);
         progress = p;
         Listener expected = listener;
-        main.post(() -> { if (expected != null && expected == listener && progress == p) expected.onProgress(p); });
+        long expectedEpoch = listenerEpoch;
+        main.post(() -> { if (expected != null && expected == listener && listenerEpoch == expectedEpoch && fence.valid(expectedEpoch) && progress == p) expected.onProgress(p); });
     }
     /** Disk-confined, coalesced pump: no recursive failure chain. */
     private void schedulePump() {
@@ -248,33 +254,44 @@ public final class DurableFrameEngine {
         if (bitmap == null) { fail(frame, "DECODE_FAILED", token, false); finishFrame(); return; }
         if (!fence.beginModel(token)) { bitmap.recycle(); returnPending(frame); finishFrame(); return; }
         final long attempt = diagnosticAttempt;
-        Runnable watchdog = () -> {
-            if (fence.timeout(token)) {
-                LifecycleDiagnostics.event(context, attempt, LifecycleHistory.Event.OCR_WATCHDOG, LifecycleHistory.Reason.OCR_TIMEOUT, null);
-                updateOnDisk();
-                Listener l = listener; if (l != null && listenerEpoch == token) l.onFatal("OCR_TIMEOUT");
-            }
-        };
+        final long modelAttempt = fence.modelAttempt();
+        timings.record(PipelineTimings.Event.NATIVE_FRAME, modelAttempt, SystemClock.elapsedRealtime(), SystemClock.uptimeMillis(), frame.enqueueSequence);
+        timings.record(PipelineTimings.Event.NATIVE_START, modelAttempt, SystemClock.elapsedRealtime(), SystemClock.uptimeMillis(), 0);
         final Task<Text> task;
         try {
             if (recognizer == null) recognizer = TextRecognition.getClient(new ChineseTextRecognizerOptions.Builder().build());
             task = recognizer.process(InputImage.fromBitmap(bitmap, 0));
+            timings.record(PipelineTimings.Event.NATIVE_RETURN, modelAttempt, SystemClock.elapsedRealtime(), SystemClock.uptimeMillis(), 0);
         } catch (Exception e) {
-            fence.modelDone(); bitmap.recycle(); fail(frame, "OCR_FAILED", token, false); finishFrame(); return;
+            fence.completeModel(modelAttempt); bitmap.recycle(); fail(frame, "OCR_FAILED", token, false); finishFrame(); return;
         }
+        Runnable watchdog = () -> {
+            timings.record(PipelineTimings.Event.NATIVE_WATCHDOG, modelAttempt, SystemClock.elapsedRealtime(), SystemClock.uptimeMillis(), task.isComplete() ? 1 : 0);
+            if (fence.timeout(token, modelAttempt)) {
+                LifecycleDiagnostics.event(context, attempt, LifecycleHistory.Event.OCR_WATCHDOG, LifecycleHistory.Reason.OCR_TIMEOUT, null);
+                updateOnDisk();
+            }
+        };
         main.postDelayed(watchdog, TIMEOUT_MS);
         // Direct executor marks native completion immediately, independent of disk backlog.
         // The frame barrier remains held until the disk-side transition is finished.
         task.addOnCompleteListener(Runnable::run, completed -> {
-            if (!fence.modelDone()) return;
+            int completion = fence.completeModel(modelAttempt);
+            if (completion < 0) return;
+            timings.record(PipelineTimings.Event.NATIVE_CALLBACK, modelAttempt, SystemClock.elapsedRealtime(), SystemClock.uptimeMillis(), completion);
             main.removeCallbacks(watchdog);
             bitmap.recycle();
             disk.execute(() -> {
                 processed++;
                 try {
-                    if (!fence.valid(token)) returnPending(frame);
-                    else if (!completed.isSuccessful() || completed.getResult() == null) fail(frame, "OCR_FAILED", token, false);
-                    else processResult(frame, lines(completed.getResult(), false), lines(completed.getResult(), true), token);
+                    DurableFrameFence.CompletionAction action = DurableFrameFence.completionAction(
+                            fence.valid(token), completion, completed.isSuccessful() && completed.getResult() != null);
+                    switch (action) {
+                        case RETURN_PENDING: returnPending(frame); break;
+                        case TIMEOUT: fail(frame, "OCR_TIMEOUT", token, false); break;
+                        case OCR_FAILED: fail(frame, "OCR_FAILED", token, false); break;
+                        case PROCESS: processResult(frame, lines(completed.getResult(), false), lines(completed.getResult(), true), token); break;
+                    }
                 } catch (RuntimeException e) { fail(frame, "OCR_FAILED", token, false); }
                 finally { finishFrame(); }
             });
@@ -343,7 +360,7 @@ public final class DurableFrameEngine {
         try { scan(); } catch (Exception e) { storageError(fence.epoch()); }
         fence.finishFrame();
         update();
-        if (fence.running() && !storageFailed && snapshot.pending > 0) schedulePump();
+        if (fence.running() && !storageFailed && snapshot != null && snapshot.pending > 0) schedulePump();
     }
     private void storageError(long token) { storageFailed = true; update(); fatal(token, "STORAGE_FAILED"); }
     private void fatal(long token, String status) {

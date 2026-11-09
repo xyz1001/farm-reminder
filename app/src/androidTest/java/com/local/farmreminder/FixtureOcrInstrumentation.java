@@ -25,6 +25,10 @@ public final class FixtureOcrInstrumentation extends Instrumentation {
     private Bundle args;
     @Override public void onCreate(Bundle arguments) { super.onCreate(arguments); args = arguments; start(); }
     @Override public void onStart() {
+        if ("pipeline-profile".equals(args.getString("mode"))) {
+            PipelineProfileProbe.run(this);
+            return;
+        }
         if ("cache".equals(args.getString("mode"))) { runCache(); return; }
         Bundle result = new Bundle();
         TextRecognizer recognizer = null;

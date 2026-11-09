@@ -91,9 +91,9 @@ public class FramePipelineTest {
     }
     @Test public void timedOutCaptureWaitsForCallbackAndCannotLeakIntoNewSession() {
         long old=p.beginCapture(200); assertTrue(p.timeoutCapture(old,12200));
-        assertFalse(p.startAllowed()); assertEquals(0,p.beginCapture(12201));
+        assertTrue(p.captureBusy()); assertFalse(p.startAllowed()); assertEquals(0,p.beginCapture(12201));
         assertFalse(p.captureUsable(old)); // callback closes its hardware buffer without copying/enqueueing
-        assertTrue(p.endCapture(old)); assertTrue(p.startAllowed()); assertEquals(0,p.pendingCount());
+        assertTrue(p.endCapture(old)); assertFalse(p.captureBusy()); assertTrue(p.startAllowed()); assertEquals(0,p.pendingCount());
         long fresh=p.beginCapture(12202); assertNotEquals(0,fresh);
         assertFalse(p.endCapture(old)); assertFalse(p.timeoutCapture(old,24202));
         assertTrue(p.captureUsable(fresh)); assertTrue(p.endCapture(fresh));

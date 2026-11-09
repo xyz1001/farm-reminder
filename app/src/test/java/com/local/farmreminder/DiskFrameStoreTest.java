@@ -358,4 +358,101 @@ public class DiskFrameStoreTest {
         try (java.io.FileOutputStream out = new java.io.FileOutputStream(manifest)) { p.store(out, null); }
         assertEquals(1, open(root).scan().failedArtifacts); assertNull(open(root).claimNext());
     }
+    @Test public void cachedCountsTrackTransitionsDiagnosticsAndMutableInput() throws Exception {
+        File root = temporary.newFolder(); DiskFrameStore store = open(root);
+        store.counts(); DiskFrameStore.Frame first = publish(store, 1); publish(store, 2);
+        first.enqueueSequence = 99999; first.state = DiskFrameStore.State.FAILED;
+        DiskFrameStore.Frame claimed = store.claimNext(); assertEquals(1, claimed.captureSequence);
+        long before = store.counts().retainedBytes;
+        store.writeDiagnostic(claimed, "ocr-lines.tsv", new byte[73]);
+        assertEquals(before + 73, store.counts().retainedBytes);
+        store.fail(claimed, "failed");
+        DiskFrameStore.CountSnapshot c = store.counts();
+        assertEquals(1, c.pending); assertEquals(1, c.failedFrames);
+        DiskFrameStore.Snapshot s = store.scan();
+        assertEquals(s.retainedBytes, c.retainedBytes); assertEquals(s.pendingBytes, c.pendingBytes);
+        store.retryFailed(); assertEquals(1, store.claimNext().captureSequence);
+    }
+
+    @Test public void hotReadsDoNotGrowWithCompletedArchive() throws Exception {
+        for (int count : new int[]{0, 1000, 4745}) {
+            File root = temporary.newFolder(); DiskFrameStore store = open(root);
+            DiskFrameStore.Frame template = publish(store, 1);
+            DiskFrameStore.Frame completed = store.claimNext(); store.acknowledge(completed);
+            File source = new File(root, template.id);
+            java.util.Properties p = new java.util.Properties();
+            try (java.io.FileInputStream in = new java.io.FileInputStream(new File(source, "manifest.properties"))) { p.load(in); }
+            if (count == 0) { assertTrue(store.cleanup(completed)); }
+            for (int i = 1; i < count; i++) {
+                String id = UUID.randomUUID().toString(); File dir = new File(root, id); assertTrue(dir.mkdir());
+                p.setProperty("frameId", id); p.setProperty("enqueueSequence", Integer.toString(i + 1));
+                try (java.io.FileOutputStream out = new java.io.FileOutputStream(new File(dir, "manifest.properties"))) { p.store(out, null); }
+                Files.copy(new File(source, "image.png").toPath(), new File(dir, "image.png").toPath());
+            }
+            store.scan();
+            final int[] reads = {0}, lists = {0}, rootLists = {0};
+            store.setReadObserver(new DiskFrameStore.ReadObserver() {
+                public void read(File path) { reads[0]++; }
+                public void list(File path) { lists[0]++; if (root.equals(path)) rootLists[0]++; }
+            });
+            DiskFrameStore.Frame fresh = frame(count + 2);
+            assertFalse(store.reconcilePublication(fresh));
+            store.publish(fresh, out -> { out.write(42); return true; });
+            assertEquals("fresh reconcile/publish must not scan root", 0, rootLists[0]);
+            reads[0] = 0; lists[0] = 0;
+            for (int i = 0; i < 10; i++) assertEquals(1, store.counts().pending);
+            assertEquals(0, reads[0]); assertEquals(0, lists[0]);
+            assertNotNull(store.claimNext());
+            assertTrue("manifest reads " + reads[0], reads[0] <= 3);
+            assertTrue("directory lists " + lists[0], lists[0] <= 2);
+        }
+    }
+
+    @Test public void uncertainManifestSyncRequiresExplicitRecovery() throws Exception {
+        File root = temporary.newFolder(); final boolean[] fail = {false};
+        DiskFrameStore store = new DiskFrameStore(root, dir -> {
+            if (fail[0] && !dir.equals(root)) { fail[0] = false; throw new IOException("sync injected"); }
+        }, DiskFrameStore.DEFAULT_OPS);
+        publish(store, 1); store.counts(); fail[0] = true;
+        try { store.claimNext(); fail(); } catch (IOException expected) { }
+        store.scan();
+        try { store.counts(); fail(); } catch (IOException expected) { }
+        try { store.claimNext(); fail(); } catch (IOException expected) { }
+        store.recover(); assertEquals(1, store.counts().failedFrames);
+    }
+    @Test public void failedFullRecoveryCannotBeClearedByPublicationReconciliation() throws Exception {
+        File root = temporary.newFolder();
+        final boolean[] failPublication = {false}, failRecovery = {false};
+        final String[] otherId = {null};
+        DiskFrameStore.Frame pending = frame(2);
+        DiskFrameStore store = new DiskFrameStore(root, dir -> {
+            if (failPublication[0] && dir.equals(root) && pending.id != null
+                    && new File(root, pending.id).isDirectory()) {
+                failPublication[0] = false; throw new IOException("publication sync failure");
+            }
+            if (failRecovery[0] && dir.getName().equals(otherId[0])) {
+                failRecovery[0] = false; throw new IOException("other directory sync failure");
+            }
+        }, DiskFrameStore.DEFAULT_OPS);
+        otherId[0] = publish(store, 1).id;
+        store.counts(); failPublication[0] = true;
+        try { store.publish(pending, out -> { out.write(42); return true; }); fail(); }
+        catch (IOException expected) { }
+        failRecovery[0] = true;
+        try { store.recover(); fail(); } catch (IOException expected) { }
+        try { store.reconcilePublication(pending); fail(); } catch (IOException expected) { }
+        try { store.counts(); fail(); } catch (IOException expected) { }
+        try { store.claimNext(); fail(); } catch (IOException expected) { }
+        store.recover(); assertEquals(2, store.counts().pending);
+    }
+    @Test public void corruptIndexedCandidateIsNeverClaimedAndScanSeesExternalChanges() throws Exception {
+        File root = temporary.newFolder(); DiskFrameStore store = open(root);
+        DiskFrameStore.Frame first = publish(store, 1); publish(store, 2); store.counts();
+        Files.write(store.image(first).toPath(), "broken".getBytes(StandardCharsets.UTF_8));
+        assertEquals(2, store.claimNext().captureSequence);
+        assertEquals(1, store.counts().failedFrames);
+        File extra = new File(root, "external.txt"); Files.write(extra.toPath(), new byte[]{1, 2, 3});
+        assertEquals(0, store.counts().failedArtifacts);
+        store.scan(); assertEquals(1, store.counts().failedArtifacts);
+    }
 }

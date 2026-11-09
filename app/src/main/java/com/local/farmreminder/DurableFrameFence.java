@@ -2,8 +2,16 @@ package com.local.farmreminder;
 
 /** In-memory linearization only: no operation holding this monitor performs IO. */
 final class DurableFrameFence {
+    enum CompletionAction { RETURN_PENDING, TIMEOUT, OCR_FAILED, PROCESS }
+    static CompletionAction completionAction(boolean valid, int completion, boolean successful) {
+        if (!valid) return CompletionAction.RETURN_PENDING;
+        if (completion == 1) return CompletionAction.TIMEOUT;
+        return successful ? CompletionAction.PROCESS : CompletionAction.OCR_FAILED;
+    }
     private long epoch;
     private boolean running, frameActive, nativeActive, transaction;
+    private long nextAttempt, activeAttempt;
+    private boolean timedOut;
 
     synchronized long start() {
         if (running || frameActive || transaction) return -1;
@@ -19,16 +27,25 @@ final class DurableFrameFence {
     }
     synchronized boolean beginModel(long token) {
         if (!valid(token) || !frameActive || nativeActive) return false;
-        nativeActive = true; return true;
+        nativeActive = true; activeAttempt = ++nextAttempt; timedOut = false; return true;
     }
+    synchronized long modelAttempt() { return activeAttempt; }
     /** Called on the model completion executor, not the potentially busy disk executor. */
     synchronized boolean modelDone() {
-        if (!nativeActive) return false;
-        nativeActive = false; return true;
+        return completeModel(activeAttempt) >= 0;
     }
     synchronized boolean timeout(long token) {
-        if (!nativeActive || !valid(token)) return false;
-        stop(); return true;
+        return timeout(token, activeAttempt);
+    }
+    synchronized boolean timeout(long token, long attempt) {
+        if (!nativeActive || activeAttempt != attempt || timedOut || !valid(token)) return false;
+        timedOut = true; return true;
+    }
+    /** -1 means stale completion; otherwise 1 means timeout and 0 means normal. */
+    synchronized int completeModel(long attempt) {
+        if (!nativeActive || activeAttempt != attempt) return -1;
+        nativeActive = false;
+        return timedOut ? 1 : 0;
     }
     synchronized boolean modelActive() { return nativeActive; }
     synchronized boolean frameActive() { return frameActive; }

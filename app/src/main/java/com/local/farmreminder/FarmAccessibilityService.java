@@ -72,7 +72,7 @@ public class FarmAccessibilityService extends AccessibilityService {
     };
     private final DurableFrameEngine.Listener listener = new DurableFrameEngine.Listener() {
         @Override public void onProgress(OcrProgress progress) {
-            if (!alive()) return;
+            if (!alive() || !isRunning || engine == null || runEpoch != engine.epoch()) return;
             publish();
             if (isRunning) schedule();
         }
@@ -256,7 +256,8 @@ public class FarmAccessibilityService extends AccessibilityService {
             else registerReceiver(screenReceiver, filter);
             receiverRegistered = true;
         }
-        if (capture.captureBusy()) armWatchdog(capture.captureId(), capture.captureStarted());
+        // The static in-flight request belongs to the retired service, not this new session.
+        if (capture.captureBusy()) armWatchdog(capture.captureId(), capture.captureStarted(), null, 0, 0);
         lastStatus = capture.captureBusy() ? CAPTURE_BLOCKED : "服务已连接，请手动启动监测";
         reason = lastStatus; publish();
         MonitorForegroundService.accessibilityChanged(true);
@@ -451,7 +452,8 @@ public class FarmAccessibilityService extends AccessibilityService {
         if (!containerPolicy.begin(session, epoch, sequence)) { capture.endCapture(request); schedule(); return; }
         if (!currentCapture(session, epoch, sequence, request)) { failProbe(session, epoch, sequence, EntryFeedbackDiagnostics.Reason.STALE_RESULT); capture.endCapture(request); schedule(); return; }
         if (containerPolicy.pending(session, epoch, sequence)) entryFeedback.probe(containerPolicy.state().name(), SystemClock.elapsedRealtime());
-        policy.captured(now); armWatchdog(request, uptime);
+        policy.captured(now); armWatchdog(request, uptime, session, epoch, sequence);
+        DurableFrameEngine.timings.record(PipelineTimings.Event.CAPTURE_REQUEST, sequence, SystemClock.elapsedRealtime(), uptime, 0);
         try {
             if (Build.VERSION.SDK_INT >= 30) takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, callback(session, epoch, sequence, request, uptime, wall, captureAttempt));
         } catch (RuntimeException e) {
@@ -464,6 +466,7 @@ public class FarmAccessibilityService extends AccessibilityService {
     private TakeScreenshotCallback callback(String session, long epoch, long sequence, long request, long requestUptime, long requestWall, long attempt) {
         return new TakeScreenshotCallback() {
             @Override public void onSuccess(ScreenshotResult result) {
+                DurableFrameEngine.timings.record(PipelineTimings.Event.CAPTURE_CALLBACK, sequence, SystemClock.elapsedRealtime(), SystemClock.uptimeMillis(), 0);
                 HardwareBuffer buffer = result.getHardwareBuffer(); Bitmap hardware = null, copy = null;
                 boolean current = currentCapture(session, epoch, sequence, request);
                 try {
@@ -472,6 +475,7 @@ public class FarmAccessibilityService extends AccessibilityService {
                     hardware = Bitmap.wrapHardwareBuffer(buffer, result.getColorSpace());
                     if (hardware == null) throw new IllegalStateException("empty screenshot");
                     copy = hardware.copy(Bitmap.Config.ARGB_8888, false);
+                    DurableFrameEngine.timings.record(PipelineTimings.Event.CAPTURE_COPY, sequence, SystemClock.elapsedRealtime(), SystemClock.uptimeMillis(), 0);
                     if (copy == null) throw new IllegalStateException("copy failed");
                     DiskFrameStore.Frame frame = new DiskFrameStore.Frame();
                     frame.sessionId = session; frame.captureSequence = sequence; frame.windowId = -1;
@@ -500,6 +504,7 @@ public class FarmAccessibilityService extends AccessibilityService {
                 }
             }
             @Override public void onFailure(int code) {
+                DurableFrameEngine.timings.record(PipelineTimings.Event.CAPTURE_CALLBACK, sequence, SystemClock.elapsedRealtime(), SystemClock.uptimeMillis(), 1);
                 boolean current = currentCapture(session, epoch, sequence, request);
                 boolean timedOut = capture.captureTimedOut() && capture.captureId() == request;
                 boolean retry = current && code == ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT
@@ -536,15 +541,17 @@ public class FarmAccessibilityService extends AccessibilityService {
         // detach compares the listener registration epoch, not the fence's post-stop epoch.
         if (alive() && engine != null && runEpoch != 0) engine.detach(listener, runEpoch);
     }
-    private void armWatchdog(long request, long started) {
+    private void armWatchdog(long request, long started, String session, long epoch, long sequence) {
         long attempt = captureAttempt;
         long revision = captureRevision; MonitorForegroundService owner = captureOwner;
         handler.postDelayed(() -> {
             if (!alive() || !capture.timeoutCapture(request, SystemClock.uptimeMillis())) return;
+            DurableFrameEngine.timings.record(PipelineTimings.Event.CAPTURE_WATCHDOG, sequence, SystemClock.elapsedRealtime(), SystemClock.uptimeMillis(), 0);
             LifecycleDiagnostics.event(this, attempt, LifecycleHistory.Event.CAPTURE_WATCHDOG, LifecycleHistory.Reason.WATCHDOG, null);
-            if (isRunning && monitorRevision == revision && monitorOwner == owner) stopSession(true);
-            reason = CAPTURE_BLOCKED; lastStatus = reason; publish();
-            if (owner != null) owner.onMonitorFailure(revision, MonitorCoordinator.Reason.WATCHDOG);
+            if (session != null && isRunning && monitorRevision == revision && monitorOwner == owner && epoch == runEpoch && session.equals(captureSession)) {
+                failProbe(session, epoch, sequence, EntryFeedbackDiagnostics.Reason.SCREENSHOT_FAILURE);
+                reason = CAPTURE_BLOCKED; lastStatus = reason; publish(); schedule();
+            }
         }, Math.max(0, FramePipeline.REQUEST_TIMEOUT_MS - (SystemClock.uptimeMillis() - started)));
     }
     private void leaveScene() {
@@ -591,6 +598,7 @@ public class FarmAccessibilityService extends AccessibilityService {
             writer.println(entryFeedback.snapshot(SystemClock.elapsedRealtime()));
             writer.println("lifecycle generation|attempt|elapsedMs|wallMs|event|reason|bits|exceptionClass; bits: ENGINE_REJECT=running,frameActive,nativeActive,transaction; other events=connected,running,fgs,reserved\n" + LifecycleDiagnostics.snapshot(this));
             writer.println("cachedPublished " + dumpSnapshot);
+            writer.println("pipeline timings (anonymous, elapsed/uptime ms)\n" + DurableFrameEngine.timings.snapshot());
             ShizukuTaskGate gate = ShizukuTaskGate.peek();
             writer.println(gate == null ? "gate=not_initialized" : gate.debugSnapshot());
         }
