@@ -26,7 +26,7 @@ public class ScreenPresentationTest {
     }
 
     @Test public void toolsKeepCountsAndStorageWithoutZeroFailureOrProtocolExplanation() {
-        assertEquals("已处理 7 张 · 排队 2 张\n留存 5 张 · 2.0 MiB",
+        assertEquals("已处理 7 张 · 排队 2 张\n本次留存 5 张 · 2.0 MiB",
                 ScreenPresentation.processingSummary(progress(false,false,"NONE",false,0)));
         assertTrue(ScreenPresentation.processingSummary(progress(false,false,"NONE",false,2)).contains("失败 2 张"));
         assertEquals("", ScreenPresentation.processingNotice(progress(false,false,"NONE",false,0)));

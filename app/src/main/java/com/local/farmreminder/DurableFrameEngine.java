@@ -76,7 +76,7 @@ public final class DurableFrameEngine {
         this.context = context;
         root = new File(context.getNoBackupFilesDir(), "frames-v1");
         disk.execute(() -> {
-            recoverStore();
+            initializeStore();
         });
     }
     private static void syncDirectory(File directory) throws IOException {
@@ -124,7 +124,7 @@ public final class DurableFrameEngine {
         diagnosticAttempt = LifecycleDiagnostics.current(context);
         disk.execute(() -> {
             update();
-            if (storageFailed && !recoverStore()) { fatal(token, "STORAGE_FAILED"); return; }
+            if (storageFailed) { fatal(token, "STORAGE_FAILED"); return; }
             if (!fence.valid(token)) return;
             try { new AlarmScheduler(context).rescheduleAll(); } catch (RuntimeException ignored) { }
             schedulePump();
@@ -159,7 +159,9 @@ public final class DurableFrameEngine {
         if (image == null || metadata == null) throw new IllegalArgumentException("missing capture");
         synchronized (captureLock) {
             if (unsaved != null) throw new IllegalStateException("capture slot occupied; ownership not transferred");
+            boolean keepScreenshot = ScreenshotRetentionPolicy.enabled(context);
             unsaved = image; unsavedMetadata = copyMetadata(metadata);
+            unsavedMetadata.keepScreenshot = keepScreenshot;
             unsavedEpoch = fence.epoch();
             unsavedMetadata.imageFileName = ImageEncodingPolicy.fileName(Build.VERSION.SDK_INT);
             unsavedMetadata.imageHasAlpha = image.hasAlpha(); writing = true;
@@ -172,7 +174,7 @@ public final class DurableFrameEngine {
         c.sessionId = f.sessionId; c.captureMethod = f.captureMethod; c.captureSequence = f.captureSequence;
         c.captureWallMs = f.captureWallMs; c.captureUptimeMs = f.captureUptimeMs; c.windowId = f.windowId;
         c.width = f.width; c.height = f.height; c.contextCertain = f.contextCertain;
-        c.imageFileName = f.imageFileName; c.imageHasAlpha = f.imageHasAlpha; return c;
+        c.imageFileName = f.imageFileName; c.imageHasAlpha = f.imageHasAlpha; c.keepScreenshot = f.keepScreenshot; return c;
     }
     private void writeCapture() {
         Bitmap bitmap; DiskFrameStore.Frame frame; long token;
@@ -194,28 +196,23 @@ public final class DurableFrameEngine {
         disk.execute(() -> {
             try {
                 if (!fence.canRecover()) { status("RETRY_BUSY"); return; }
-                if (storageFailed && !recoverStore()) { status("STORAGE_FAILED"); return; }
+                if (storageFailed) { status("STORAGE_FAILED"); return; }
                 if (store == null) throw new IOException("store unavailable");
-                store.retryFailed();
                 synchronized (captureLock) { writing = unsaved != null; }
-                if (writing) { update(); writeCapture(); } else scan();
+                if (writing) { update(); writeCapture(); }
+                if (writeFailed) return;
+                store.retryFailed();
+                scan();
                 if (fence.running()) schedulePump();
             } catch (Exception e) { storageFailed = true; update(); }
         });
     }
-    /** Explicit recovery only; never run recover() over a live claim. */
-    private boolean recoverStore() {
-        boolean recovered = DurableFrameRecovery.attempt(fence, () -> {
-            DiskFrameStore candidate = new DiskFrameStore(root, DurableFrameEngine::syncDirectory, DiskFrameStore.DEFAULT_OPS);
-            candidate.recover();
-            candidate.scan();
-            DiskFrameStore.CountSnapshot checked = candidate.counts();
-            store = candidate; snapshot = checked;
-            try { lowSpace = new StatFs(root.getAbsolutePath()).getAvailableBytes() < RESERVE; }
-            catch (RuntimeException e) { lowSpace = true; }
-        });
-        storageFailed = !recovered;
-        update(); return recovered;
+    private void initializeStore() {
+        try {
+            store = new DiskFrameStore(root, DurableFrameEngine::syncDirectory, DiskFrameStore.DEFAULT_OPS);
+            storageFailed = false;
+            scan();
+        } catch (Exception e) { storageFailed = true; update(); }
     }
     private void status(String value) { main.post(() -> { Listener l = listener; if (l != null) l.onStatus(value); }); }
     private void scan() throws IOException {
@@ -242,7 +239,7 @@ public final class DurableFrameEngine {
         pump.request(() -> drain(fence.epoch()));
     }
     private void drain(long token) {
-        if (store == null || storageFailed || !fence.beginFrame(token)) return;
+        if (store == null || storageFailed || writeFailed || !fence.beginFrame(token)) return;
         DiskFrameStore.Frame frame;
         try {
             if (!fence.valid(token)) { finishFrame(); return; }
@@ -332,6 +329,7 @@ public final class DurableFrameEngine {
             try { new AlarmScheduler(context).rescheduleAll(); } catch (RuntimeException ignored) { }
             store.acknowledge(frame);
             reminders.forgetFrameReceipt(frame.id);
+            store.discardFinalized(frame);
             main.post(() -> { if (fence.valid(token)) { Listener l = listener; if (l != null) l.onFrameResult(frame, lines, outcome, token); } });
         } catch (Exception e) {
             if (frame.state == DiskFrameStore.State.PROCESSING) fail(frame, "STORAGE_FAILED", token, admitted);
@@ -342,6 +340,8 @@ public final class DurableFrameEngine {
         try {
             if (!admitted && !fence.valid(token)) { store.returnPending(frame); return; }
             store.fail(frame, code);
+            if ("OCR_FAILED".equals(code) || "OCR_TIMEOUT".equals(code) || "DECODE_FAILED".equals(code))
+                store.discardFinalized(frame);
             notifyFrameFailure(frame, code, token);
         } catch (Exception e) { storageError(token); }
     }

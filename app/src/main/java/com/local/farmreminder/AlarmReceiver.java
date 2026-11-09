@@ -53,8 +53,8 @@ public class AlarmReceiver extends BroadcastReceiver {
                             Bitmap bitmap = snapshot.avatar.isEmpty() || SystemClock.elapsedRealtime() >= entryElapsed + 2500
                                     ? null : AvatarStore.load(context, snapshot.avatar, 65536);
                             NotificationIdentityLabel label = NotificationIdentityLabel.EMPTY;
-                            if (!snapshot.source.isEmpty() && SystemClock.elapsedRealtime() < entryElapsed + 2250) {
-                                try { label = NotificationIdentityOcr.read(context, snapshot.source, entryElapsed + 2250); }
+                            if (!snapshot.plate.isEmpty() && SystemClock.elapsedRealtime() < entryElapsed + 2250) {
+                                try { label = NotificationIdentityOcr.readNameplate(context, snapshot.plate, entryElapsed + 2250); }
                                 catch (RuntimeException | OutOfMemoryError ignored) { }
                             }
                             return new Prepared(snapshot, bitmap, plate, label == null ? NotificationIdentityLabel.EMPTY : label);
@@ -87,7 +87,7 @@ public class AlarmReceiver extends BroadcastReceiver {
                     NotificationIdentityBinding.Snapshot current = NotificationIdentityBinding.select(group.identity, group.reminders);
                     Bitmap bitmap = prepared != null && NotificationIdentityBinding.sameAvatar(prepared.snapshot, current) ? prepared.bitmap : null;
                     Bitmap plate = prepared != null && NotificationIdentityBinding.samePlate(prepared.snapshot, current) ? prepared.plate : null;
-                    NotificationIdentityLabel label = prepared != null && NotificationIdentityBinding.sameSource(prepared.snapshot, current)
+                    NotificationIdentityLabel label = prepared != null && NotificationIdentityBinding.samePlate(prepared.snapshot, current)
                             ? prepared.label : NotificationIdentityLabel.EMPTY;
                     return notifyMeasured(context, group.identity, group.reminders, bitmap, plate, label, timing);
                 }

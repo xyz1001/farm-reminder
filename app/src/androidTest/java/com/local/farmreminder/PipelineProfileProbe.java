@@ -106,7 +106,7 @@ final class PipelineProfileProbe {
             checkBudget();
             start = now();
             DiskFrameStore.Snapshot s = original.scan();
-            output.append("scan=").append(i + 1).append(" cache=").append(i == 0 ? "first_after_constructor" : "warm")
+            output.append("explicitScan=").append(i + 1)
                     .append(" elapsedMs=").append(now() - start).append(" frames=").append(s.frames.size())
                     .append(" pending=").append(s.pending).append(" failedArtifacts=").append(s.failedArtifacts)
                     .append(" cleanupPending=").append(s.cleanupPending).append(" archived=").append(s.archivedCount)
@@ -118,7 +118,7 @@ final class PipelineProfileProbe {
         long countsStartNs = SystemClock.elapsedRealtimeNanos();
         DiskFrameStore.CountSnapshot counts = null;
         for (int i = 0; i < 10_000; i++) counts = original.counts();
-        output.append("hotCountsCalls=10000 elapsedNs=").append(SystemClock.elapsedRealtimeNanos() - countsStartNs)
+        output.append("processLocalCountsCalls=10000 elapsedNs=").append(SystemClock.elapsedRealtimeNanos() - countsStartNs)
                 .append(" pending=").append(counts.pending).append(" archived=").append(counts.archivedCount)
                 .append(" retainedBytes=").append(counts.retainedBytes).append('\n');
         checkBudget();

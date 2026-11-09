@@ -116,15 +116,6 @@ public class DurableFrameFenceTest {
         f.finishTransaction(); f.finishFrame(); f.start();
         assertFalse(f.shouldNotifyFailure(e));
     }
-    @Test public void recoveryRetriesAfterErrorButNeverTouchesActiveFrame() {
-        DurableFrameFence f = new DurableFrameFence(); AtomicInteger calls = new AtomicInteger();
-        DurableFrameRecovery.Attempt operation = () -> { if (calls.incrementAndGet() == 1) throw new Exception(); };
-        assertFalse(DurableFrameRecovery.attempt(f, operation));
-        long e = f.start(); assertTrue(f.beginFrame(e));
-        assertFalse(DurableFrameRecovery.attempt(f, operation)); assertEquals(1, calls.get());
-        f.stop(); f.finishFrame();
-        assertTrue(DurableFrameRecovery.attempt(f, operation)); assertEquals(2, calls.get());
-    }
     @Test public void thousandsOfFailuresPumpWithoutRecursion() {
         ArrayDeque<Runnable> queue = new ArrayDeque<>();
         DurableFramePump pump = new DurableFramePump(queue::add);

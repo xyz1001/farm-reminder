@@ -25,6 +25,7 @@ import android.widget.LinearLayout;
 import android.widget.RadioButton;
 import android.widget.RadioGroup;
 import android.widget.ScrollView;
+import android.widget.Switch;
 import android.widget.TextView;
 import java.lang.ref.WeakReference;
 import java.text.SimpleDateFormat;
@@ -227,6 +228,19 @@ public class MainActivity extends Activity {
 
         LinearLayout export = card(settingsPage, 16, Color.WHITE);
         addText(export, "诊断包", 19, INK, true, 0);
+        Switch saveScreenshots = new Switch(this);
+        saveScreenshots.setText("保存截图（调试）");
+        saveScreenshots.setTextSize(16);
+        saveScreenshots.setTextColor(INK);
+        saveScreenshots.setSwitchPadding(dp(16));
+        saveScreenshots.setMinHeight(dp(48));
+        saveScreenshots.setSaveEnabled(false);
+        saveScreenshots.setChecked(ScreenshotRetentionPolicy.enabled(this));
+        export.addView(saveScreenshots, spaced(-1, -2, 8));
+        saveScreenshots.setOnCheckedChangeListener((view, checked) ->
+                ScreenshotRetentionPolicy.setEnabled(this, checked));
+        addText(export, "开启后保留截图，用于排查和导出；关闭后，截图在识别完成后自动删除。", 12, MUTED, false, 4);
+        addText(export, "仅对新截图生效，已保留的截图不受影响。", 12, MUTED, false, 4);
         exportButton = button(export, "导出 ZIP", false, 12, () ->
                 new AlertDialog.Builder(this).setTitle("导出诊断包？")
                         .setMessage("包含保留的整屏截图与识别记录，可能含其他页面或敏感内容。请选择可信的保存位置。")

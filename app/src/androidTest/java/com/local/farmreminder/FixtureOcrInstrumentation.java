@@ -25,6 +25,7 @@ public final class FixtureOcrInstrumentation extends Instrumentation {
     private Bundle args;
     @Override public void onCreate(Bundle arguments) { super.onCreate(arguments); args = arguments; start(); }
     @Override public void onStart() {
+        if ("nameplate-identity".equals(args.getString("mode"))) { runNameplateIdentity(); return; }
         if ("pipeline-profile".equals(args.getString("mode"))) {
             PipelineProfileProbe.run(this);
             return;
@@ -94,6 +95,48 @@ public final class FixtureOcrInstrumentation extends Instrumentation {
         } catch (Exception e) { code = 1; result.putString("error", e.getClass().getName()); }
         finally { if (recognizer != null) recognizer.close(); if (source != null) source.recycle(); }
         finish(code, result);
+    }
+
+    /** Read the production plate directly, without assets or source-frame access. */
+    private void runNameplateIdentity() {
+        Bundle result = new Bundle();
+        java.util.concurrent.ExecutorService worker = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+            Thread thread = new Thread(r, "nameplate-identity-probe");
+            thread.setDaemon(true);
+            return thread;
+        });
+        try {
+            String plateRef = args.getString("plateRef");
+            String expected = args.getString("expectedLevel");
+            if (plateRef == null || !plateRef.matches("[0-9a-f]{64}")
+                    || (expected != null && !expected.matches("[1-9][0-9]{0,3}")))
+                throw new IllegalArgumentException("arguments");
+            java.util.concurrent.Future<NotificationIdentityLabel> future = worker.submit(() -> {
+                long start = SystemClock.elapsedRealtime();
+                return NotificationIdentityOcr.readNameplate(getTargetContext(), plateRef, start + 2250);
+            });
+            NotificationIdentityLabel label = future.get(15, TimeUnit.SECONDS);
+            String text = label.text();
+            java.util.regex.Matcher match = java.util.regex.Pattern.compile("\\(([0-9]+)级\\)$").matcher(text);
+            boolean hasLevel = match.find();
+            String level = hasLevel ? match.group(1) : "none";
+            String name = hasLevel ? text.substring(0, match.start()) : text;
+            boolean nameAvailable = !name.isEmpty() && !name.equals("好友");
+            boolean expectedMatch = expected == null || expected.equals(level);
+            result.putString("output", "workerFinished=true nameAvailable=" + nameAvailable
+                    + " levelAvailable=" + hasLevel + " level=" + level + " expectedMatch=" + expectedMatch);
+            finish(expectedMatch ? 0 : 1, result);
+        } catch (java.util.concurrent.TimeoutException timeout) {
+            result.putString("output", "workerFinished=false controllerDeadlineExceeded=true");
+            finish(1, result);
+        } catch (Exception error) {
+            if (error instanceof InterruptedException) Thread.currentThread().interrupt();
+            result.putString("output", "probeError=" + error.getClass().getSimpleName());
+            finish(1, result);
+        } finally {
+            // Do not interrupt an OCR task whose native work still owns its bitmap.
+            worker.shutdown();
+        }
     }
 
     /** Real cached frames only; never writes either production image store. */
@@ -196,6 +239,21 @@ public final class FixtureOcrInstrumentation extends Instrumentation {
             if (portrait != null) saveCrop(working, portrait.left, portrait.top, portrait.right, portrait.bottom, new File(dir, id + "-portrait.png"), false);
             boolean plateStorable = plate != null && NameplateAssetPolicy.wide(plate.right - plate.left, plate.bottom - plate.top);
             if (plateStorable) saveCrop(working, plate.left, plate.top, plate.right, plate.bottom, new File(dir, id + "-plate.png"), true);
+            if (plateStorable && "true".equals(args.getString("nameplateProbe"))) {
+                Bitmap stored = BitmapFactory.decodeFile(new File(dir, id + "-plate.png").getAbsolutePath());
+                if (stored == null) throw new IllegalStateException("stored plate decode");
+                long plateStart = SystemClock.elapsedRealtime();
+                NotificationIdentityLabel plateLabel = NotificationIdentityOcr.readPlateBitmap(stored, plateStart + 2250);
+                String plateText = plateLabel.text();
+                java.util.regex.Matcher plateLevel = java.util.regex.Pattern.compile("\\(([0-9]+)级\\)$").matcher(plateText);
+                boolean hasPlateLevel = plateLevel.find();
+                String plateName = hasPlateLevel ? plateText.substring(0, plateLevel.start()) : plateText;
+                output.append(id).append(" nameplateProbe decodedSavedCrop=true nameAvailable=")
+                        .append(!plateName.isEmpty() && !plateName.equals("好友"))
+                        .append(" levelAvailable=").append(hasPlateLevel)
+                        .append(" level=").append(hasPlateLevel ? plateLevel.group(1) : "none")
+                        .append(" elapsedMs=").append(SystemClock.elapsedRealtime() - plateStart).append('\n');
+            }
             output.append(id).append(" original=").append(dimensions.outWidth).append('x').append(dimensions.outHeight)
                     .append(" working=").append(w).append('x').append(h).append(" lines=").append(lines.size())
                     .append(" countdownPresent=").append(countdown != null).append(" countdownMs=").append(countdown == null ? "none" : countdown)

@@ -2,7 +2,6 @@ package com.local.farmreminder;
 
 import android.content.Context;
 import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.graphics.Rect;
 import android.os.SystemClock;
 import com.google.android.gms.tasks.Task;
@@ -12,7 +11,6 @@ import com.google.mlkit.vision.text.Text;
 import com.google.mlkit.vision.text.TextRecognition;
 import com.google.mlkit.vision.text.TextRecognizer;
 import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions;
-import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -20,7 +18,6 @@ import java.util.concurrent.TimeUnit;
 /** Fresh optional notification OCR. This API is synchronous and worker-only. */
 final class NotificationIdentityOcr {
     private static final NotificationOcrLease.Gate GATE = new NotificationOcrLease.Gate();
-    private static final long MAX_PIXELS = 4_000_000, MAX_FILE = 64L * 1024 * 1024;
     private static final class Resources {
         Bitmap bitmap;
         Bitmap crop, scaled;
@@ -37,28 +34,15 @@ final class NotificationIdentityOcr {
     private NotificationIdentityOcr() { }
     private static long remaining(long deadline) { return NotificationOcrBudget.remaining(deadline, SystemClock::elapsedRealtime); }
 
-    static NotificationIdentityLabel read(Context context, String sourceFrameRef, long deadlineElapsed) {
+    static NotificationIdentityLabel readNameplate(Context context, String plateRef, long deadlineElapsed) {
         if (remaining(deadlineElapsed) <= 0) return NotificationIdentityLabel.EMPTY;
         Resources resources = new Resources();
         NotificationOcrLease lease = GATE.acquire(resources::close);
         if (lease == null) return NotificationIdentityLabel.EMPTY;
         try {
             if (remaining(deadlineElapsed) <= 0) return NotificationIdentityLabel.EMPTY;
-            File image = FrameSourceResolver.resolve(context, sourceFrameRef);
-            if (remaining(deadlineElapsed) <= 0 || image == null || !image.isFile() || image.length() <= 0 || image.length() > MAX_FILE)
-                return NotificationIdentityLabel.EMPTY;
-            BitmapFactory.Options bounds = new BitmapFactory.Options(); bounds.inJustDecodeBounds = true;
-            BitmapFactory.decodeFile(image.getAbsolutePath(), bounds);
-            if (remaining(deadlineElapsed) <= 0 || bounds.outWidth <= 0 || bounds.outHeight <= 0
-                    || bounds.outWidth > 100000 || bounds.outHeight > 100000) return NotificationIdentityLabel.EMPTY;
-            int sample = 1;
-            while (((bounds.outWidth + (long) sample - 1) / sample) * ((bounds.outHeight + (long) sample - 1) / sample) > MAX_PIXELS) sample *= 2;
-            BitmapFactory.Options options = new BitmapFactory.Options();
-            options.inSampleSize = sample; options.inPreferredConfig = Bitmap.Config.ARGB_8888;
-            resources.bitmap = BitmapFactory.decodeFile(image.getAbsolutePath(), options);
-            if (remaining(deadlineElapsed) <= 0 || resources.bitmap == null
-                    || (long) resources.bitmap.getWidth() * resources.bitmap.getHeight() > MAX_PIXELS) return NotificationIdentityLabel.EMPTY;
-            return readOwned(resources, lease, deadlineElapsed);
+            resources.bitmap = NameplateStore.load(context, plateRef, NameplateAssetPolicy.MAX_PIXELS);
+            return readOwned(resources, lease, deadlineElapsed, true);
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             return NotificationIdentityLabel.EMPTY;
@@ -72,7 +56,18 @@ final class NotificationIdentityOcr {
         Resources resources = new Resources(); resources.bitmap = bitmap;
         NotificationOcrLease lease = GATE.acquire(resources::close);
         if (lease == null) { resources.close(); return NotificationIdentityLabel.EMPTY; }
-        try { return readOwned(resources, lease, deadlineElapsed); }
+        try { return readOwned(resources, lease, deadlineElapsed, false); }
+        catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); return NotificationIdentityLabel.EMPTY; }
+        catch (Exception | OutOfMemoryError ignored) { return NotificationIdentityLabel.EMPTY; }
+        finally { lease.consumerDone(); }
+    }
+
+    /** Diagnostic replay of an already decoded stored plate; takes ownership. */
+    static NotificationIdentityLabel readPlateBitmap(Bitmap bitmap, long deadlineElapsed) {
+        Resources resources = new Resources(); resources.bitmap = bitmap;
+        NotificationOcrLease lease = GATE.acquire(resources::close);
+        if (lease == null) { resources.close(); return NotificationIdentityLabel.EMPTY; }
+        try { return readOwned(resources, lease, deadlineElapsed, true); }
         catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); return NotificationIdentityLabel.EMPTY; }
         catch (Exception | OutOfMemoryError ignored) { return NotificationIdentityLabel.EMPTY; }
         finally { lease.consumerDone(); }
@@ -97,13 +92,15 @@ final class NotificationIdentityOcr {
         } finally { if (!submitted) lease.nativeDone(token); }
     }
 
-    private static NotificationIdentityLabel readOwned(Resources resources, NotificationOcrLease lease, long deadlineElapsed) throws Exception {
+    private static NotificationIdentityLabel readOwned(Resources resources, NotificationOcrLease lease, long deadlineElapsed, boolean plate) throws Exception {
             if (resources.bitmap == null || remaining(deadlineElapsed) <= 0) return NotificationIdentityLabel.EMPTY;
+            int w = resources.bitmap.getWidth(), h = resources.bitmap.getHeight();
+            AvatarLocator.Bounds plateAvatar = plate ? NameplateLocator.portraitInStoredPlate(w, h) : null;
+            if (plate && plateAvatar == null) return NotificationIdentityLabel.EMPTY;
             resources.recognizer = TextRecognition.getClient(new ChineseTextRecognizerOptions.Builder().build());
             Text result = recognize(resources, lease, resources.bitmap, deadlineElapsed);
             long parseDeadline = deadlineElapsed > Long.MAX_VALUE - 250 ? Long.MAX_VALUE : deadlineElapsed + 250;
             if (remaining(parseDeadline) <= 0 || result == null) return NotificationIdentityLabel.EMPTY;
-            int w = resources.bitmap.getWidth(), h = resources.bitmap.getHeight();
             List<OcrLine> lines = new ArrayList<>();
             List<NotificationIdentityParser.TextRow> rows = new ArrayList<>();
             for (Text.TextBlock block : result.getTextBlocks()) for (Text.Line line : block.getLines()) {
@@ -118,10 +115,13 @@ final class NotificationIdentityOcr {
                 rows.add(new NotificationIdentityParser.TextRow(parent, elements));
             }
             if (remaining(parseDeadline) <= 0) return NotificationIdentityLabel.EMPTY;
-            int[] pixels = new int[w * h];
-            resources.bitmap.getPixels(pixels, 0, w, 0, 0, w, h);
-            if (remaining(parseDeadline) <= 0) return NotificationIdentityLabel.EMPTY;
-            AvatarLocator.Bounds avatar = AvatarLocator.locate(pixels, w, h, lines);
+            AvatarLocator.Bounds avatar = plateAvatar;
+            if (!plate) {
+                int[] pixels = new int[w * h];
+                resources.bitmap.getPixels(pixels, 0, w, 0, 0, w, h);
+                if (remaining(parseDeadline) <= 0) return NotificationIdentityLabel.EMPTY;
+                avatar = AvatarLocator.locate(pixels, w, h, lines);
+            }
             if (avatar == null || remaining(parseDeadline) <= 0) return NotificationIdentityLabel.EMPTY;
             int d = avatar.right - avatar.left;
             boolean completeBadge = d > 0 && avatar.left + 1.20 * d <= w && avatar.top + .88 * d <= h

@@ -17,16 +17,12 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Properties;
-import java.util.HashSet;
-import java.util.Set;
 import java.util.UUID;
-import java.util.Map;
-import java.util.HashMap;
-import java.util.TreeSet;
+import java.util.ArrayDeque;
 
 /**
- * Serial-executor-confined durable frame repository. It does not start capture or OCR.
- * Frames are retained after completion; explicit cleanup is available for legacy callers.
+ * Serial-executor-confined repository with a current-process FIFO. It does not start capture or OCR.
+ * Finalized frames are retained only when requested; explicit export scans do not recover the queue.
  * The platform adapter must supply a directory fsync implementation.
  */
 final class DiskFrameStore {
@@ -54,6 +50,8 @@ final class DiskFrameStore {
         long enqueueSequence, captureSequence, captureWallMs, captureUptimeMs, imageBytes;
         int windowId, width, height, attempts;
         boolean contextCertain = true, imageHasAlpha = true;
+        // Capture-time policy, intentionally process-local and never written to the manifest.
+        boolean keepScreenshot;
         State state = State.PENDING;
     }
     static final class Snapshot {
@@ -73,37 +71,20 @@ final class DiskFrameStore {
         }
     }
 
-    // One serial owner per root; external edits require an explicit authoritative scan.
-    private static final class Entry {
-        final String name, pendingId;
-        final long sequence, retained, pendingBytes;
-        final int pending, failedFrames, failedArtifacts, cleanupPending, archived;
-        Entry(String name, Snapshot s) {
-            this.name = name; retained = s.retainedBytes; pendingBytes = s.pendingBytes;
-            pending = s.pending; failedArtifacts = s.failedArtifacts;
-            cleanupPending = s.cleanupPending; archived = s.archivedCount;
-            Frame f = s.frames.isEmpty() ? null : s.frames.get(0);
-            failedFrames = f != null && f.state == State.FAILED ? 1 : 0;
-            pendingId = f != null && f.state == State.PENDING ? f.id : null;
-            sequence = pendingId == null ? 0 : f.enqueueSequence;
-        }
-    }
     interface ReadObserver { void read(File path); void list(File path); }
     private ReadObserver observer;
     void setReadObserver(ReadObserver observer) { this.observer = observer; }
-    private final Map<String, Entry> entries = new HashMap<>();
-    private final TreeSet<Entry> pendingIndex = new TreeSet<>(Comparator
-            .comparingLong((Entry e) -> e.sequence).thenComparing(e -> e.pendingId));
-    private int cachedPending, cachedFailedFrames, cachedFailedArtifacts, cachedCleanup, cachedArchived;
-    private long cachedRetained, cachedPendingBytes;
-    private boolean cacheReady, uncertain;
-    private final Set<String> uncertainPublications = new HashSet<>();
+    private final ArrayDeque<Frame> pending = new ArrayDeque<>();
+    private final ArrayDeque<Frame> failed = new ArrayDeque<>();
+    private long retainedBytes, pendingBytes;
+    private int archivedCount;
+    private boolean uncertain;
+    private String uncertainPublication;
 
     private final File root;
     private final DirectorySync sync;
     private final FileOps ops;
     private final DigestReader digestReader;
-    private final Set<String> recoveryRequired = new HashSet<>();
     private long nextSequence;
 
     DiskFrameStore(File root, DirectorySync sync, FileOps ops) throws IOException {
@@ -120,23 +101,27 @@ final class DiskFrameStore {
             try { nextSequence = Long.parseLong(p.getProperty("lastSequence")); }
             catch (RuntimeException e) { throw new IOException("invalid sequence ledger", e); }
         }
-        // Scan sequence even for staged or completed records; never reuse an observed number.
-        for (File file : children(root)) {
-            try { nextSequence = Math.max(nextSequence, readFrame(file).enqueueSequence); }
-            catch (IOException | RuntimeException ignored) { /* Preserve unknown artifacts. */ }
-        }
     }
 
     Frame publish(Frame f, ImageWriter writer) throws IOException {
-        if (uncertain && uncertainPublications.isEmpty()) throw new IOException("frame store requires recovery");
+        if (uncertain && (f.id == null || !f.id.equals(uncertainPublication)))
+            throw new IOException("frame store unavailable");
         if (f.sessionId == null || f.captureMethod == null || f.width <= 0 || f.height <= 0 || !validImageName(f.imageFileName))
             throw new IOException("invalid capture metadata");
         try {
             Frame result = publishInternal(f, writer);
-            refresh(new File(root, "sequence.properties"));
-            refresh(directory(result));
+            enqueuePublished(result);
             return result;
-        } catch (IOException | RuntimeException e) { uncertain = true; if (f.id != null) uncertainPublications.add(f.id); cacheReady = false; throw e; }
+        } catch (IOException | RuntimeException e) {
+            uncertain = true; uncertainPublication = f.id; throw e;
+        }
+    }
+    private void enqueuePublished(Frame f) throws IOException {
+        if (f.state != State.PENDING) return;
+        for (Frame existing : pending) if (existing.id.equals(f.id)) return;
+        Frame copy = readFrame(directory(f));
+        copy.keepScreenshot = f.keepScreenshot;
+        pending.addLast(copy); pendingBytes += copy.imageBytes; retainedBytes += copy.imageBytes;
     }
     private Frame publishInternal(Frame f, ImageWriter writer) throws IOException {
         if (f.sessionId == null || f.captureMethod == null || f.width <= 0 || f.height <= 0 || !validImageName(f.imageFileName))
@@ -177,69 +162,20 @@ final class DiskFrameStore {
         return f;
     }
 
-    /** Startup recovery is explicit and must run once, never while a claim is active. */
-    void recover() throws IOException {
-        cacheReady = false;
-        // A failed full recovery cannot be resolved by reconciling just one publication.
-        uncertainPublications.clear();
-        try {
-        for (File dir : children(root)) {
-            if (!dir.isDirectory()) continue;
-            if (dir.getName().endsWith(".staging")) {
-                Frame f;
-                try {
-                    f = readFrame(dir);
-                } catch (IOException | RuntimeException ignored) { continue; }
-                if (!(f.id + ".staging").equals(dir.getName())) continue;
-                publishStaging(dir, f);
-            } else {
-                Frame f;
-                try {
-                    f = readFrame(dir);
-                } catch (IOException | RuntimeException ignored) { continue; }
-                if (!f.id.equals(dir.getName())) continue;
-                if (f.state == State.PROCESSING) {
-                    recoveryRequired.add(f.id);
-                    f.state = State.FAILED; f.failureCode = "INTERRUPTED_PROCESS";
-                    writeManifest(dir, f, true);
-                }
-                recoveryRequired.remove(f.id);
-            }
-        }
-        // Explicit recovery re-establishes directory durability before clearing uncertainty.
-        for (File dir : children(root)) if (dir.isDirectory()) sync.sync(dir);
-        sync.sync(root);
-        uncertain = false; uncertainPublications.clear();
-        } catch (IOException | RuntimeException e) { uncertain = true; throw e; }
-    }
-
     Snapshot scan() throws IOException {
-        cacheReady = false;
         Snapshot result = new Snapshot();
-        Map<String, Entry> fresh = new HashMap<>();
         for (File dir : children(root)) {
             Snapshot part = scanEntry(dir);
-            fresh.put(dir.getName(), new Entry(dir.getName(), part));
             result.frames.addAll(part.frames);
             result.pending += part.pending; result.pendingBytes += part.pendingBytes;
             result.failedArtifacts += part.failedArtifacts; result.cleanupPending += part.cleanupPending;
             result.archivedCount += part.archivedCount; result.retainedBytes += part.retainedBytes;
         }
         result.frames.sort(Comparator.comparingLong((Frame f) -> f.enqueueSequence).thenComparing(f -> f.id));
-        if (!uncertain) {
-            entries.clear(); pendingIndex.clear();
-            cachedPending = cachedFailedFrames = cachedFailedArtifacts = cachedCleanup = cachedArchived = 0;
-            cachedRetained = cachedPendingBytes = 0;
-            for (Entry e : fresh.values()) addEntry(e, 1);
-            cacheReady = true;
-        }
         return result;
     }
 
     private Snapshot scanEntry(File dir) throws IOException {
-        return scanEntry(dir, false);
-    }
-    private Snapshot scanEntry(File dir, boolean strict) throws IOException {
         Snapshot result = new Snapshot();
         {
             if (dir.getName().equals("sequence.properties")) { result.retainedBytes += dir.length(); return result; }
@@ -256,7 +192,6 @@ final class DiskFrameStore {
             try {
                 f = readFrame(dir);
             } catch (IOException | RuntimeException e) {
-                if (strict) throw new IOException("cannot refresh touched frame", e);
                 result.failedArtifacts++; result.retainedBytes += imageBytes(dir);
                 return result;
             }
@@ -265,7 +200,6 @@ final class DiskFrameStore {
                 return result;
             }
                 result.retainedBytes += imageBytes(dir); result.frames.add(f);
-                if (recoveryRequired.contains(f.id)) result.failedArtifacts++;
                 if (f.state == State.PENDING) { result.pending++; result.pendingBytes += f.imageBytes; }
                 if (f.state == State.COMPLETED) {
                     if (hasImage(dir, f)) result.archivedCount++; else result.cleanupPending++;
@@ -274,54 +208,30 @@ final class DiskFrameStore {
         return result;
     }
 
-    private void addEntry(Entry e, int sign) {
-        if (sign > 0) { entries.put(e.name, e); if (e.pendingId != null) pendingIndex.add(e); }
-        else { entries.remove(e.name); if (e.pendingId != null) pendingIndex.remove(e); }
-        cachedPending += sign * e.pending; cachedFailedFrames += sign * e.failedFrames;
-        cachedFailedArtifacts += sign * e.failedArtifacts; cachedCleanup += sign * e.cleanupPending;
-        cachedArchived += sign * e.archived; cachedRetained += sign * e.retained;
-        cachedPendingBytes += sign * e.pendingBytes;
-    }
-    private void refresh(File path) throws IOException {
-        if (!cacheReady) return;
-        // A touched frame was just written: do not convert a failed refresh into a guessed count.
-        Entry replacement = path.exists() ? new Entry(path.getName(), scanEntry(path, true)) : null;
-        Entry previous = entries.get(path.getName());
-        if (previous != null) addEntry(previous, -1);
-        if (replacement != null) addEntry(replacement, 1);
-    }
     CountSnapshot counts() throws IOException {
-        if (uncertain) throw new IOException("frame store requires recovery");
-        if (!cacheReady) scan();
-        return new CountSnapshot(cachedPending, cachedFailedFrames, cachedFailedArtifacts,
-                cachedCleanup, cachedArchived, cachedRetained, cachedPendingBytes);
+        if (uncertain && uncertainPublication == null) throw new IOException("frame store unavailable");
+        return new CountSnapshot(pending.size(), failed.size(), 0, 0, archivedCount, retainedBytes, pendingBytes);
     }
 
     Frame claimNext() throws IOException {
-        counts();
-        // Bound corrupt work per invocation; fail instead of reporting an empty queue.
-        for (int examined = 0; examined < 64 && !pendingIndex.isEmpty(); examined++) {
-            Entry candidate = pendingIndex.first();
-            Frame f;
-            try { f = readFrame(new File(root, candidate.name)); }
-            catch (IOException | RuntimeException e) { uncertain = true; cacheReady = false; throw e; }
-            if (!candidate.pendingId.equals(f.id) || f.enqueueSequence != candidate.sequence || f.state != State.PENDING) {
-                cacheReady = false;
-                throw new IOException("pending index changed; scan required");
-            }
-            boolean valid;
-            try { valid = validImage(directory(f), f); }
-            catch (IOException | RuntimeException e) { uncertain = true; cacheReady = false; throw e; }
-            if (!valid) {
-                transition(f, State.PENDING, State.FAILED, "INVALID_IMAGE");
-                continue;
-            }
-            f.state = State.PROCESSING; f.attempts++;
-            try { writeManifest(directory(f), f, true); refresh(directory(f)); }
-            catch (IOException | RuntimeException e) { uncertain = true; cacheReady = false; throw e; }
-            return f;
+        if (uncertain) throw new IOException("frame store unavailable");
+        while (!pending.isEmpty()) {
+            Frame f = pending.peekFirst();
+            try {
+                Frame persisted = readFrame(directory(f));
+                persisted.keepScreenshot = f.keepScreenshot;
+                if (!sameCapture(f, persisted) || persisted.state != State.PENDING)
+                    throw new IOException("pending frame changed");
+                if (!validImage(directory(f), persisted)) {
+                    transition(f, State.PENDING, State.FAILED, "INVALID_IMAGE");
+                    continue;
+                }
+                persisted.state = State.PROCESSING; persisted.attempts++;
+                writeManifest(directory(f), persisted, true);
+                pending.removeFirst(); pendingBytes -= f.imageBytes;
+                return persisted;
+            } catch (IOException | RuntimeException e) { uncertain = true; uncertainPublication = null; throw e; }
         }
-        if (!pendingIndex.isEmpty()) throw new IOException("invalid pending batch limit reached");
         return null;
     }
 
@@ -345,15 +255,13 @@ final class DiskFrameStore {
             }
             ops.replace(tmp, new File(dir, name));
             sync.sync(dir);
-            refresh(dir);
-        } catch (IOException | RuntimeException e) { uncertain = true; cacheReady = false; throw e; }
+        } catch (IOException | RuntimeException e) { uncertain = true; uncertainPublication = null; throw e; }
     }
 
     /** Reconcile an uncertain publication without disturbing an active OCR claim. */
     boolean reconcilePublication(Frame f) throws IOException {
         if (f.id == null) return false;
-        cacheReady = false;
-        if (uncertain && !uncertainPublications.contains(f.id))
+        if (uncertain && !f.id.equals(uncertainPublication))
             throw new IOException("frame store requires recovery");
         try {
             boolean reconciled = reconcilePublicationInternal(f);
@@ -363,8 +271,8 @@ final class DiskFrameStore {
             if (staged != null && staged.isDirectory()) sync.sync(staged);
             if (published != null && published.isDirectory()) sync.sync(published);
             sync.sync(root);
-            uncertainPublications.remove(f.id);
-            uncertain = !uncertainPublications.isEmpty();
+            uncertain = false; uncertainPublication = null;
+            if (reconciled) enqueuePublished(f);
             return reconciled;
         } catch (IOException | RuntimeException e) { uncertain = true; throw e; }
     }
@@ -432,15 +340,38 @@ final class DiskFrameStore {
         transition(f, State.PROCESSING, State.COMPLETED, "");
     }
     void retryFailed() throws IOException {
-        cacheReady = false;
-        for (Frame f : scan().frames) if (f.state == State.FAILED)
-            transition(f, State.FAILED, State.PENDING, "");
+        if (uncertain) throw new IOException("frame store unavailable");
+        while (!failed.isEmpty()) transition(failed.peekFirst(), State.FAILED, State.PENDING, "");
+    }
+
+    /** Remove only a finalized, non-debug frame from this process. */
+    void discardFinalized(Frame f) throws IOException {
+        if (f.keepScreenshot) return;
+        if (uncertain) throw new IOException("frame store unavailable");
+        File dir = directory(f);
+        Frame persisted = readFrame(dir);
+        if (!sameCapture(f, persisted) || (persisted.state != State.COMPLETED && persisted.state != State.FAILED))
+            throw new IOException("frame is not finalized");
+        File[] files = children(dir);
+        for (File file : files) {
+            String name = file.getName();
+            if (!isCleanupFile(file) && !(file.isFile() && (name.equals("ocr-lines.tsv") || name.equals("result.properties"))))
+                throw new IOException("unknown frame artifact");
+        }
+        try {
+            for (File file : files) if (!ops.delete(file)) throw new IOException("cannot delete frame artifact");
+            sync.sync(dir);
+            if (!ops.delete(dir)) throw new IOException("cannot delete frame directory");
+            sync.sync(root);
+        } catch (IOException | RuntimeException e) { uncertain = true; uncertainPublication = null; throw e; }
+        retainedBytes -= f.imageBytes;
+        if (persisted.state == State.COMPLETED) archivedCount--;
+        else failed.removeIf(item -> item.id.equals(f.id));
     }
 
     /** Cleanup is safe only after the COMPLETED transition was durably committed. */
     boolean cleanup(Frame f) throws IOException {
         if (uncertain) throw new IOException("frame store requires recovery");
-        cacheReady = false;
         try { return cleanupInternal(f); }
         catch (IOException | RuntimeException e) { uncertain = true; throw e; }
     }
@@ -467,7 +398,6 @@ final class DiskFrameStore {
     /** Resume interrupted cleanup without treating a tombstone as an OCR candidate. */
     void cleanupTombstones() throws IOException {
         if (uncertain) throw new IOException("frame store requires recovery");
-        cacheReady = false;
         try { cleanupTombstonesInternal(); }
         catch (IOException | RuntimeException e) { uncertain = true; throw e; }
     }
@@ -506,9 +436,15 @@ final class DiskFrameStore {
         if (uncertain) throw new IOException("frame store requires recovery");
         Frame persisted = readFrame(directory(f));
         if (persisted.state != from) throw new IOException("invalid frame transition");
+        persisted.keepScreenshot = f.keepScreenshot;
         persisted.state = to; persisted.failureCode = code;
-        try { writeManifest(directory(f), persisted, true); refresh(directory(f)); }
-        catch (IOException | RuntimeException e) { uncertain = true; cacheReady = false; throw e; }
+        try { writeManifest(directory(f), persisted, true); }
+        catch (IOException | RuntimeException e) { uncertain = true; uncertainPublication = null; throw e; }
+        if (from == State.PENDING) { pending.removeFirst(); pendingBytes -= f.imageBytes; }
+        if (from == State.FAILED) failed.removeFirst();
+        if (to == State.FAILED) failed.addLast(persisted);
+        if (to == State.PENDING) { if (from == State.PROCESSING) pending.addFirst(persisted); else pending.addLast(persisted); pendingBytes += persisted.imageBytes; }
+        if (to == State.COMPLETED) archivedCount++;
         f.state = to; f.failureCode = code; f.attempts = persisted.attempts;
     }
 

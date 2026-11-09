@@ -49,7 +49,7 @@ public class DiagnosticsArchiveTest {
         ReminderStore.FrameOutcome outcome = new ReminderStore.FrameOutcome(true, false, false, false, Collections.emptyList(), "NO_MATCH");
         store.writeDiagnostic(f, "result.properties", DiagnosticCodec.result(f, "名字", Arrays.asList(123L, 456L), outcome));
         store.acknowledge(f); long retained = store.scan().retainedBytes;
-        store = open(root); store.recover(); store.retryFailed();
+        store = open(root); store.retryFailed();
         DiskFrameStore.Snapshot s = store.scan();
         assertEquals(1, s.archivedCount); assertEquals(0, s.cleanupPending); assertEquals(retained, s.retainedBytes);
         assertTrue(store.image(f).isFile()); assertNull(store.claimNext());

@@ -28,7 +28,7 @@ final class ScreenPresentation {
 
     static String processingSummary(OcrProgress progress) {
         return "已处理 " + progress.processed + " 张 · 排队 " + progress.queued + " 张\n"
-                + "留存 " + progress.archivedCount + " 张"
+                + "本次留存 " + progress.archivedCount + " 张"
                 + (progress.failedCount > 0 ? " · 失败 " + progress.failedCount + " 张" : "")
                 + String.format(Locale.CHINA, " · %.1f MiB", progress.retainedBytes / (1024f * 1024f));
     }
