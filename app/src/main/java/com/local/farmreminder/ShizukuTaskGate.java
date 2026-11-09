@@ -14,6 +14,8 @@ import rikka.shizuku.Shizuku;
 
 /** Fail-closed snapshots; all potentially blocking Shizuku calls run on one bounded worker. */
 public final class ShizukuTaskGate {
+    // Increment whenever the user-service code or its dependencies change.
+    private static final int USER_SERVICE_VERSION = 2;
     public static final class Snapshot {
         public final boolean match;
         public final String state, key, component, reason;
@@ -62,7 +64,7 @@ public final class ShizukuTaskGate {
     private ShizukuTaskGate(Context context) {
         this.context = context.getApplicationContext();
         args = new Shizuku.UserServiceArgs(new ComponentName(this.context, ShizukuTaskQueryService.class))
-                .processNameSuffix("task_query").tag("task_query").daemon(false).version(1)
+                .processNameSuffix("task_query").tag("task_query").daemon(false).version(USER_SERVICE_VERSION)
                 .debuggable((this.context.getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0);
         control = new AsyncControl(this::work);
         control.wake();
@@ -172,18 +174,16 @@ public final class ShizukuTaskGate {
                         @Override public void onServiceConnected(ComponentName name, IBinder binder) {
                             synchronized (ShizukuTaskGate.this) {
                                 connectedCallbacks++;
-                                if (connection != this || epoch != bindEpoch || !active) return;
+                                if (!ShizukuStartupPolicy.current(connection, this, epoch, bindEpoch, active)) return;
                                 pendingBinder = binder;
+                                // The deadline must not remove a binder waiting for the link worker.
+                                binding = false;
                             }
                             control.wake();
                         }
                         @Override public void onServiceDisconnected(ComponentName name) { disconnected(this); }
                     };
                     connection = bind; binding = true; bindWanted = false; action = 5; bindAttempts++;
-                    final ServiceConnection scheduled = bind;
-                    timer.schedule(() -> { synchronized (ShizukuTaskGate.this) {
-                        if (connection == scheduled && binding) { epoch++; invalidate("连接超时"); detach(); }
-                    } control.wake(); }, 3, TimeUnit.SECONDS);
                 } else if (pendingBinder != null && connection != null) {
                     link = pendingBinder; pendingBinder = null; bind = connection; run = epoch; action = 6;
                 } else if (active && isEnabled(context) && permissionFresh() && service != null && queryWanted && !query.busy()) {
@@ -223,7 +223,17 @@ public final class ShizukuTaskGate {
                     }
                 }
             } else if (action == 5) {
-                try { Shizuku.bindUserService(args, bind); }
+                try {
+                    Shizuku.bindUserService(args, bind);
+                    // Start our local budget after IPC returns, not before the server can start.
+                    final ServiceConnection scheduled = bind;
+                    final long scheduledEpoch = run;
+                    timer.schedule(() -> { synchronized (ShizukuTaskGate.this) {
+                        if (ShizukuStartupPolicy.shouldTimeout(connection, scheduled, epoch, scheduledEpoch, active, binding)) {
+                            epoch++; invalidate("连接超时"); detach();
+                        }
+                    } control.wake(); }, ShizukuStartupPolicy.STARTUP_BUDGET_MS, TimeUnit.MILLISECONDS);
+                }
                 catch (RuntimeException e) { debugException(e); disconnected(bind); }
             } else if (action == 6) {
                 final ServiceConnection linked = bind;
