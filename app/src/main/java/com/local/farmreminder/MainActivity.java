@@ -44,14 +44,12 @@ public class MainActivity extends Activity {
     private static final int MUTED = 0xFF657367, PAPER = 0xFFF7F6EF;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final List<Button> leadButtons = new ArrayList<>();
-    private TextView captureStatus, diagnosticsText, feedback, exactHint, listTitle;
-    private TextView processingSummary, ocrState, queueDetails;
-    private TextView foregroundStatus, foregroundError;
+    private TextView captureStatus, feedback, exactHint, listTitle;
     private TextView modeHint;
     private RadioGroup modeChoices;
     private RadioButton usageMode, shizukuMode;
     private boolean updatingMode;
-    private Button monitorButton, retryButton, notificationButton, exactButton;
+    private Button monitorButton, notificationButton, exactButton;
     private Button exportButton;
     private TextView exportStatus;
     private TextView vibrationStatus, vibrationHint;
@@ -68,13 +66,10 @@ public class MainActivity extends Activity {
     private String listSignature = "";
     private String feedbackMessage = "";
     private final Set<String> expandedGroups = new HashSet<>();
-    private LinearLayout homePage, settingsPage, toolsPage, setupPage, navigation;
+    private LinearLayout homePage, settingsPage, setupPage, navigation;
     private TextView setupProgress, setupTitle, setupDetail;
     private LinearLayout setupModes;
-    private Button setupAction, notificationContinue, setupBack;
-    private LinearLayout setupMonitorPanel;
-    private TextView setupMonitorStatus;
-    private Button setupMonitorRetry, setupMonitorStop;
+    private Button setupAction, setupBack;
     private boolean setupVisible, reviewMode, screenBuilt;
     private String currentPage = "home";
     private SetupFlowPolicy.Step displayedStep;
@@ -96,7 +91,7 @@ public class MainActivity extends Activity {
         if (retained == null && state != null) {
             exportState.picking = state.getBoolean("exportPicking", false);
             if (state.getBoolean("exportBusy", false))
-                exportState.message = "Σ╕èµ¼íσ»╝σç║τ╗ôµ₧£µ£¬τí«Φ«ñ∩╝îΦ»╖µúÇµƒÑΣ┐¥σ¡ÿΣ╜ìτ╜«∩╝¢σÅ»Θçìµû░σ»╝σç║πÇé";
+                exportState.message = "上次导出结果未确认，请检查保存位置；可重新导出。";
         }
         exportState.activity = new WeakReference<>(this);
         settings = getSharedPreferences("settings", MODE_PRIVATE);
@@ -106,7 +101,7 @@ public class MainActivity extends Activity {
             if (expanded != null) expandedGroups.addAll(expanded);
             lifecycleAttempt = state.getLong("lifecycleGeneration", 0) == LifecycleDiagnostics.generation(this) ? state.getLong("lifecycleAttempt", 0) : 0;
             observingUserStart = lifecycleAttempt != 0 && state.getBoolean("observingUserStart", false);
-            currentPage = state.getString("currentPage", "home");
+            currentPage = "settings".equals(state.getString("currentPage", "home")) ? "settings" : "home";
             setupVisible = state.getBoolean("setupVisible", false);
             reviewMode = state.getBoolean("reviewMode", false);
             String savedStep = state.getString("backStep", "");
@@ -176,10 +171,10 @@ public class MainActivity extends Activity {
         LinearLayout page = column();
         page.setPadding(dp(20), dp(26), dp(20), dp(28));
         scroll.addView(page);
-        homePage = column(); settingsPage = column(); toolsPage = column(); setupPage = column();
-        page.addView(homePage); page.addView(settingsPage); page.addView(toolsPage); page.addView(setupPage);
-        addText(homePage, "σå£σ£║µÅÉΘåÆ", 30, INK, true, 0);
-        monitorButton = button(homePage, "σ╝Çσºïτ¢æµ╡ï", true, 24, () -> {
+        homePage = column(); settingsPage = column(); setupPage = column();
+        page.addView(homePage); page.addView(settingsPage); page.addView(setupPage);
+        addText(homePage, "农场提醒", 30, INK, true, 0);
+        monitorButton = button(homePage, "开始监测", true, 24, () -> {
             MonitorPresentation current = MonitorPresentation.from(MonitorCoordinator.getSnapshot(this),
                     Build.VERSION.SDK_INT >= 30, SetupFlowPolicy.requiredReady(setupStep()));
             if (current.showStop) requestStopMonitoring();
@@ -187,64 +182,27 @@ public class MainActivity extends Activity {
         });
         captureStatus = addText(homePage, "", 14, MUTED, false, 8);
         captureStatus.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
-        listTitle = addText(homePage, "σ╛àµÅÉΘåÆ 0 τ╗ä", 21, INK, true, 30);
+        listTitle = addText(homePage, "待提醒 0 组", 21, INK, true, 30);
         reminders = column(); homePage.addView(reminders, spaced(-1, -2, 8));
 
-        addText(toolsPage, "σ╖Ñσà╖", 28, INK, true, 0);
-        LinearLayout progress = card(toolsPage, 22, Color.WHITE);
-        addText(progress, "σñäτÉåΣ╕Äσ¡ÿσé¿", 19, INK, true, 0);
-        processingSummary = addText(progress, "", 13, INK, false, 12);
-        ocrState = addText(progress, "", 13, MUTED, false, 8);
-        retryButton = button(progress, "ΘçìΦ»òσñäτÉå", false, 10, () -> {
-            try {
-                FarmAccessibilityService.retryFailedFrames(this);
-                showFeedback(MonitorCoordinator.getSnapshot(this).monitoringRunning
-                        ? "σ╖▓Φ»╖µ▒éΘçìΦ»ò" : "σ╖▓Φ»╖µ▒éΘçìΦ»ò∩╝îΘÿƒσêùΣ┐¥τòÖ");
-            } catch (RuntimeException e) { showFeedback("µ£¬Φâ╜ΘçìΦ»ò∩╝îσñ▒Φ┤Ñσ¢╛τëçΣ╗ìΣ┐¥τòÖ"); }
-        });
-        retryButton.setVisibility(View.GONE);
-        LinearLayout export = card(toolsPage, 16, Color.WHITE);
-        addText(export, "Φ»èµû¡σîà", 19, INK, true, 0);
-        exportButton = button(export, "σ»╝σç║ ZIP", false, 12, () ->
-                new AlertDialog.Builder(this).setTitle("σ»╝σç║Φ»èµû¡σîà∩╝ƒ")
-                        .setMessage("σîàσÉ½Σ┐¥τòÖτÜäµò┤σ▒Åµê¬σ¢╛Σ╕ÄΦ»åσê½Φ«░σ╜ò∩╝îσÅ»Φâ╜σÉ½σà╢Σ╗ûΘí╡Θ¥óµêûµòÅµäƒσåàσ«╣πÇéΦ»╖ΘÇëµï⌐σÅ»Σ┐íτÜäΣ┐¥σ¡ÿΣ╜ìτ╜«πÇé")
-                        .setNegativeButton("σÅûµ╢ê", null).setPositiveButton("ΘÇëµï⌐Σ╜ìτ╜«", (d, w) -> requestDiagnosticsExport()).show());
-        exportStatus = addText(export, "", 12, MUTED, false, 8);
-        Button diagnosticsToggle = button(toolsPage, "µèÇµ£»Φ»èµû¡", false, 16, () -> {});
-        LinearLayout technical = card(toolsPage, 8, Color.WHITE);
-        technical.setVisibility(View.GONE);
-        foregroundStatus = addText(technical, "", 13, INK, false, 0);
-        foregroundError = addText(technical, "", 13, INK, false, 8);
-        queueDetails = addText(technical, "", 12, MUTED, false, 8);
-        diagnosticsText = addText(technical, "", 12, MUTED, false, 10);
-        diagnosticsText.setTextIsSelectable(true);
-        diagnosticsToggle.setOnClickListener(v -> {
-            boolean expanded = technical.getVisibility() != View.VISIBLE;
-            technical.setVisibility(expanded ? View.VISIBLE : View.GONE);
-            diagnosticsToggle.setText(expanded ? "µö╢Φ╡╖µèÇµ£»Φ»èµû¡" : "µèÇµ£»Φ»èµû¡");
-        });
-        button(technical, "σê╖µû░Φ»èµû¡", false, 10, () -> {
-            FarmAccessibilityService.refreshDiskProgress(this); refresh();
-        });
-
-        addText(settingsPage, "Φ«╛τ╜«", 28, INK, true, 0);
+        addText(settingsPage, "设置", 28, INK, true, 0);
         LinearLayout permissions = card(settingsPage, 22, Color.WHITE);
-        button(permissions, "τ¢æµ╡ïµû╣σ╝ÅΣ╕Äµ¥âΘÖÉ", false, 0, () -> {
+        button(permissions, "监测方式", false, 0, () -> {
             reviewMode = true; backStep = null; setupVisible = true; refresh();
         });
-        exactButton = button(permissions, "τ▓╛τí«Θù╣ΘÆƒ", false, 8, this::requestExactAlarm);
-        exactHint = addText(permissions, "µ£¬σ╝ÇσÉ»σÅ»Φâ╜σ╗╢Φ┐ƒµÅÉΘåÆ", 12, MUTED, false, 7);
+        exactButton = button(permissions, "精确闹钟", false, 8, this::requestExactAlarm);
+        exactHint = addText(permissions, "未开启可能延迟提醒", 12, MUTED, false, 7);
         LinearLayout notificationSettings = card(settingsPage, 16, Color.WHITE);
         vibrationStatus = buildNotificationSettings(notificationSettings);
-        notificationButton = button(notificationSettings, "σàüΦ«╕σ║öτö¿ΘÇÜτƒÑ", false, 8, this::requestNotifications);
+        notificationButton = button(notificationSettings, "允许应用通知", false, 8, this::requestNotifications);
         vibrationHint = notificationSettingsHint(notificationSettings);
         LinearLayout timing = card(settingsPage, 16, Color.WHITE);
-        addText(timing, "µÅÉσëìσñÜΣ╣àµÅÉΘåÆ", 18, INK, true, 0);
-        addText(timing, "Σ╗àσ»╣µû░Φ«░σ╜òτöƒµòê", 12, MUTED, false, 7);
+        addText(timing, "提前多久提醒", 18, INK, true, 0);
+        addText(timing, "仅对新记录生效", 12, MUTED, false, 7);
         LinearLayout choices = new LinearLayout(this);
         timing.addView(choices, spaced(-1, -2, 13));
         int[] values = {0, 60, 180, 300};
-        String[] labels = {"µêÉτåƒµù╢", "1 σêåΘÆƒ", "3 σêåΘÆƒ", "5 σêåΘÆƒ"};
+        String[] labels = {"成熟时", "1 分钟", "3 分钟", "5 分钟"};
         for (int i = 0; i < values.length; i++) {
             final int value = values[i];
             Button choice = makeButton(labels[i], false);
@@ -261,13 +219,19 @@ public class MainActivity extends Activity {
         }
         updateLeadButtons();
 
-        button(timing, "µ╡ïΦ»òµÅÉΘåÆ ┬╖ 10 τºÆσÉÄ", false, 13, () -> {
+        button(timing, "测试提醒 · 10 秒后", false, 13, () -> {
             try {
                 showMessage(AlarmPlan.testScheduleMessage(scheduler.scheduleTest(10)));
-            } catch (RuntimeException e) { showMessage("µ╡ïΦ»òµ£¬Φâ╜σ«ëµÄÆ∩╝îΦ»╖µúÇµƒÑΦ«╛τ╜«"); }
+            } catch (RuntimeException e) { showMessage("测试未能安排，请检查设置"); }
         });
 
-        button(settingsPage, "µê¬σ¢╛Σ╕ÄΘÜÉτºü", false, 8, this::showPrivacy);
+        LinearLayout export = card(settingsPage, 16, Color.WHITE);
+        addText(export, "诊断包", 19, INK, true, 0);
+        exportButton = button(export, "导出 ZIP", false, 12, () ->
+                new AlertDialog.Builder(this).setTitle("导出诊断包？")
+                        .setMessage("包含保留的整屏截图与识别记录，可能含其他页面或敏感内容。请选择可信的保存位置。")
+                        .setNegativeButton("取消", null).setPositiveButton("选择位置", (d, w) -> requestDiagnosticsExport()).show());
+        exportStatus = addText(export, "", 12, MUTED, false, 8);
         buildSetupPanel();
         feedback = addText(root, feedbackMessage, 13, GREEN, false, 0);
         feedback.setPadding(dp(20), dp(10), dp(20), dp(10));
@@ -276,52 +240,42 @@ public class MainActivity extends Activity {
         navigation = new LinearLayout(this);
         navigation.setPadding(dp(14), dp(6), dp(14), dp(10));
         root.addView(navigation, new LinearLayout.LayoutParams(-1, -2));
-        for (String name : new String[]{"τ¢æµ╡ï", "Φ«╛τ╜«", "σ╖Ñσà╖"}) {
+        for (String name : new String[]{"监测", "设置"}) {
             Button tab = makeButton(name, false);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1);
             lp.setMargins(dp(3), 0, dp(3), 0); navigation.addView(tab, lp);
             tab.setOnClickListener(v -> {
-                currentPage = "Φ«╛τ╜«".equals(name) ? "settings" : "σ╖Ñσà╖".equals(name) ? "tools" : "home";
+                currentPage = "设置".equals(name) ? "settings" : "home";
                 setupVisible = false; reviewMode = false; backStep = null; refresh(); scroll.smoothScrollTo(0, 0);
             });
         }
     }
 
     private void buildSetupPanel() {
-        setupProgress = addText(setupPage, "σçåσñç", 13, GREEN, true, 6);
-        setupTitle = addText(setupPage, "ΘÇëµï⌐τ¢æµ╡ïµû╣σ╝Å", 28, INK, true, 24);
+        setupProgress = addText(setupPage, "准备", 13, GREEN, true, 6);
+        setupTitle = addText(setupPage, "监测方式", 28, INK, true, 24);
         setupDetail = addText(setupPage, "", 15, MUTED, false, 12);
         setupModes = card(setupPage, 24, Color.WHITE);
         modeChoices = new RadioGroup(this);
         modeChoices.setOrientation(RadioGroup.VERTICAL); modeChoices.setSaveEnabled(false);
         setupModes.addView(modeChoices);
-        usageMode = modeChoice("Σ╜┐τö¿µâàσå╡ ┬╖ Θ╗ÿΦ«ñ"); shizukuMode = modeChoice("Shizuku");
+        usageMode = modeChoice("使用情况 · 默认"); shizukuMode = modeChoice("Shizuku");
         modeChoices.check(ShizukuTaskGate.isEnabled(this) ? shizukuMode.getId() : usageMode.getId());
         modeChoices.setOnCheckedChangeListener((group, id) -> {
             if (updatingMode) return;
-            if (!canChangeMode()) { showFeedback("Φ»╖σàêσü£µ¡óτ¢æµ╡ï"); refresh(); return; }
+            if (!canChangeMode()) { showFeedback("请先停止监测"); refresh(); return; }
             settings.edit().putBoolean("useShizuku", id == shizukuMode.getId()).apply(); refresh();
         });
         modeHint = addText(setupModes, "", 12, MUTED, false, 8);
-        setupAction = button(setupPage, "τ╗ºτ╗¡", true, 24, this::performSetupAction);
-        notificationContinue = button(setupPage, "µÜéΣ╕ìσ╝ÇσÉ»∩╝îτ╗ºτ╗¡", false, 8, () -> {
-            if (displayedStep != SetupFlowPolicy.Step.NOTIFICATIONS) return;
-            settings.edit().putBoolean("notificationDeferred", true).apply();
-            reviewMode = false; backStep = null; setupVisible = false; currentPage = "home"; refresh();
-        });
-        setupBack = button(setupPage, "Φ┐öσ¢₧", false, 8, this::navigateBack);
-        setupMonitorPanel = card(setupPage, 24, Color.WHITE);
-        setupMonitorStatus = addText(setupMonitorPanel, "", 14, INK, false, 0);
-        setupMonitorRetry = button(setupMonitorPanel, "ΘçìΦ»òτ¢æµ╡ï", false, 12, this::requestMonitoring);
-        setupMonitorStop = button(setupMonitorPanel, "σü£µ¡óτ¢æµ╡ï", false, 8, this::requestStopMonitoring);
-        button(setupPage, "ΘÇÜτƒÑΣ╕Äµî»σè¿Φ«╛τ╜«", false, 16, this::openNotificationSettings);
+        setupAction = button(setupPage, "继续", true, 24, this::performSetupAction);
+        setupBack = button(setupPage, "返回", false, 8, this::navigateBack);
     }
 
     private TextView buildNotificationSettings(LinearLayout parent) {
-        addText(parent, "ΘÇÜτƒÑΣ╕Äµî»σè¿", 18, INK, true, 0);
+        addText(parent, "通知与振动", 18, INK, true, 0);
         TextView status = addText(parent, "", 14, INK, false, 10);
-        button(parent, "µëôσ╝Çτ│╗τ╗ƒΦ«╛τ╜«", false, 10, this::openNotificationSettings)
-                .setContentDescription("µëôσ╝ÇΘÇÜτƒÑΣ╕Äµî»σè¿τ│╗τ╗ƒΦ«╛τ╜«");
+        button(parent, "打开系统设置", false, 10, this::openNotificationSettings)
+                .setContentDescription("打开通知与振动系统设置");
         return status;
     }
 
@@ -337,7 +291,7 @@ public class MainActivity extends Activity {
 
     private void openNotificationSettings() {
         NotificationSettingsPolicy.Target opened = NotificationSettingsNavigator.open(this);
-        if (opened == null) showMessage("µùáµ│òµëôσ╝Ç∩╝îΦ»╖σ£¿τ│╗τ╗ƒΦ«╛τ╜«Σ╕¡µë╛σê░µ£¼σ║öτö¿πÇé");
+        if (opened == null) showMessage("无法打开，请在系统设置中找到本应用。");
         else clearFeedback();
     }
 
@@ -364,7 +318,7 @@ public class MainActivity extends Activity {
         } catch (RuntimeException e) {
             LifecycleDiagnostics.event(this, lifecycleAttempt, LifecycleHistory.Event.START_REQUEST, LifecycleHistory.Reason.EXCEPTION, e);
             observingUserStart = false;
-            showFeedback("σÉ»σè¿Φ»╖µ▒éµ£¬τí«Φ«ñ∩╝îΦ»╖µúÇµƒÑσ╜ôσëìτè╢µÇüσÉÄΘçìΦ»ò");
+            showFeedback("启动请求未确认，请检查当前状态后重试");
         }
         refresh();
     }
@@ -375,18 +329,20 @@ public class MainActivity extends Activity {
             MonitorCoordinator.RequestResult result = MonitorForegroundService.requestStop(this);
             showFeedback(result.code == MonitorCoordinator.RequestCode.ACCEPTED
                     ? "" : MonitorPresentation.stopFeedback(result.code));
-        } catch (RuntimeException e) { showFeedback("σü£µ¡óΦ»╖µ▒éµ£¬τí«Φ«ñ∩╝îΦ»╖ΘçìΦ»ò"); }
+        } catch (RuntimeException e) { showFeedback("停止请求未确认，请重试"); }
         refresh();
     }
 
     private SetupFlowPolicy.Step setupStep() {
         boolean shizuku = ShizukuTaskGate.isEnabled(this);
-        return SetupFlowPolicy.next(Build.VERSION.SDK_INT >= 30,
+        SetupFlowPolicy.Step step = SetupFlowPolicy.next(Build.VERSION.SDK_INT >= 30,
                 settings.getBoolean("modeChosen", false), shizuku,
                 !shizuku && UsageAccessGate.hasPermission(this),
                 shizuku && ShizukuTaskGate.get(this).hasPermission(),
                 FarmAccessibilityService.isEnabled(this), FarmAccessibilityService.isConnected,
                 notificationsAllowed(), settings.getBoolean("notificationDeferred", false));
+        // Optional notification permission is managed only from Settings, never a setup gate.
+        return SetupFlowPolicy.requiredReady(step) ? SetupFlowPolicy.Step.READY : step;
     }
 
     private void renderNavigation() {
@@ -402,17 +358,17 @@ public class MainActivity extends Activity {
         }
         homePage.setVisibility(!setupVisible && "home".equals(currentPage) ? View.VISIBLE : View.GONE);
         settingsPage.setVisibility(!setupVisible && "settings".equals(currentPage) ? View.VISIBLE : View.GONE);
-        toolsPage.setVisibility(!setupVisible && "tools".equals(currentPage) ? View.VISIBLE : View.GONE);
         setupPage.setVisibility(setupVisible ? View.VISIBLE : View.GONE);
-        navigation.setVisibility(setupVisible ? View.GONE : View.VISIBLE);
+        // Keep Home reachable during permission loss so monitoring can still be stopped there.
+        navigation.setVisibility(View.VISIBLE);
         if (Build.VERSION.SDK_INT >= 33) updateBackCallback();
         for (int i = 0; i < navigation.getChildCount(); i++) {
             Button tab = (Button) navigation.getChildAt(i);
-            boolean selected = i == ("settings".equals(currentPage) ? 1 : "tools".equals(currentPage) ? 2 : 0);
+            boolean selected = !setupVisible && i == ("settings".equals(currentPage) ? 1 : 0);
             tab.setSelected(selected);
             tab.setTextColor(selected ? Color.WHITE : GREEN);
             tab.setBackground(background(selected ? GREEN : 0xFFF0F3EB, 13, 0));
-            tab.setContentDescription(tab.getText() + (selected ? "∩╝îσ╜ôσëìΘí╡Θ¥ó" : ""));
+            tab.setContentDescription(tab.getText() + (selected ? "，当前页面" : ""));
         }
         if (!setupVisible) return;
         displayedStep = SetupFlowPolicy.displayedStep(actual, reviewMode, backStep);
@@ -420,59 +376,53 @@ public class MainActivity extends Activity {
         setupModes.setVisibility(mode ? View.VISIBLE : View.GONE);
         setupProgress.setVisibility(mode ? View.GONE : View.VISIBLE);
         setupAction.setEnabled(true);
-        notificationContinue.setVisibility(displayedStep == SetupFlowPolicy.Step.NOTIFICATIONS
-                ? View.VISIBLE : View.GONE);
-        setupBack.setText(displayedStep == SetupFlowPolicy.Step.WAITING ? "Φ┐öσ¢₧µê¬σ¢╛Φ«╛τ╜«" : "Φ┐öσ¢₧");
+        setupBack.setText(displayedStep == SetupFlowPolicy.Step.WAITING ? "返回截图设置" : "返回");
         setupDetail.setVisibility(View.VISIBLE);
         switch (displayedStep) {
             case MODE:
-                setupProgress.setText("σçåσñç"); setupTitle.setText("ΘÇëµï⌐τ¢æµ╡ïµû╣σ╝Å");
-                setupDetail.setText(""); setupAction.setText("τ╗ºτ╗¡"); break;
+                setupProgress.setText("准备"); setupTitle.setText("监测方式");
+                setupDetail.setText(""); setupAction.setText("继续"); break;
             case SOURCE:
-                setupProgress.setText("1 / 3");
+                setupProgress.setText("1 / 2");
                 if (ShizukuTaskGate.isEnabled(this)) {
-                    setupTitle.setText("Φ┐₧µÄÑ Shizuku");
+                    setupTitle.setText("连接 Shizuku");
                     setupDetail.setText(shortShizukuStatus());
-                    setupAction.setText(ShizukuTaskGate.get(this).hasPermission() ? "τ╗ºτ╗¡" : "µÄêµ¥â / σê╖µû░");
+                    setupAction.setText(ShizukuTaskGate.get(this).hasPermission() ? "继续" : "授权 / 刷新");
                 } else {
-                    setupTitle.setText("σ║öτö¿Σ╜┐τö¿µâàσå╡µ¥âΘÖÉ");
-                    setupDetail.setText("τö¿Σ║Äσêñµû¡σ╛«Σ┐íσ░Åτ¿ïσ║Åµÿ»σÉªσ£¿σëìσÅ░");
-                    setupAction.setText(UsageAccessGate.hasPermission(this) ? "τ╗ºτ╗¡" : "σÄ╗µÄêµ¥â");
+                    setupTitle.setText("应用使用情况权限");
+                    setupDetail.setText("用于判断微信小程序是否在前台");
+                    setupAction.setText(UsageAccessGate.hasPermission(this) ? "继续" : "去授权");
                 }
                 break;
             case SCREENSHOT:
-                setupProgress.setText("2 / 3"); setupTitle.setText("σÉ»τö¿µê¬σ¢╛µ£ìσèí");
-                setupDetail.setText("µò┤σ▒Åµê¬σ¢╛σÅ»Φâ╜σîàσÉ½σà╢Σ╗ûσåàσ«╣∩╝¢µê¬σ¢╛σÆîΦ»åσê½µûçσ¡ùσ£¿µ£¼µ£║Σ┐¥τòÖ∩╝îσÅ»σ»╝σç║πÇé");
-                setupAction.setText(FarmAccessibilityService.isEnabled(this) ? "µƒÑτ£ïτ│╗τ╗ƒΦ«╛τ╜«" : "σëìσ╛ÇσÉ»τö¿"); break;
+                setupProgress.setText("2 / 2"); setupTitle.setText("启用截图服务");
+                setupDetail.setText("整屏截图可能包含其他内容；截图和识别文字在本机保留，可导出。");
+                setupAction.setText(FarmAccessibilityService.isEnabled(this) ? "查看系统设置" : "前往启用"); break;
             case WAITING:
-                setupProgress.setText("2 / 3"); setupTitle.setText("τ¡ëσ╛àµê¬σ¢╛µ£ìσèíΦ┐₧µÄÑ");
-                setupDetail.setText("σ╖▓σÉ»τö¿∩╝îσÅ»τ¿ìσÉÄσê╖µû░");
-                setupAction.setText("σê╖µû░"); break;
-            case NOTIFICATIONS:
-                setupProgress.setText("3 / 3 ┬╖ σÅ»ΘÇë"); setupTitle.setText("σ╝ÇσÉ»ΘÇÜτƒÑ");
-                setupDetail.setText("σà│Θù¡ΘÇÜτƒÑσÅ»Φâ╜µö╢Σ╕ìσê░µÅÉΘåÆ∩╝îΣ╗ìσÅ»τ¢æµ╡ïπÇé");
-                setupAction.setText("σàüΦ«╕ΘÇÜτƒÑ"); break;
+                setupProgress.setText("2 / 2"); setupTitle.setText("等待截图服务连接");
+                setupDetail.setText("已启用，可稍后刷新");
+                setupAction.setText("刷新"); break;
             case UNSUPPORTED:
-                setupProgress.setText("Φ«╛σñçΘÖÉσê╢"); setupTitle.setText("Θ£ÇΦªü Android 11 σÅèΣ╗ÑΣ╕è");
-                setupDetail.setText("µ¡ñΦ«╛σñçΣ╕ìΦâ╜µê¬σ¢╛∩╝îσ╖▓µ£ëµÅÉΘåÆΣ╕Äσ»╝σç║Σ╗ìσÅ»Σ╜┐τö¿");
-                setupAction.setText("Φ┐öσ¢₧ΘªûΘí╡"); break;
+                setupProgress.setText("设备限制"); setupTitle.setText("需要 Android 11 及以上");
+                setupDetail.setText("此设备不能截图，已有提醒与导出仍可使用");
+                setupAction.setText("返回首页"); break;
             default:
-                setupProgress.setText("σ╖▓σ«îµêÉ"); setupTitle.setText("σçåσñçσ░▒τ╗¬");
+                setupProgress.setText("已完成"); setupTitle.setText("准备就绪");
                 setupProgress.setVisibility(View.GONE);
                 setupDetail.setText("");
                 setupDetail.setVisibility(View.GONE);
-                setupAction.setText("Φ┐öσ¢₧ΘªûΘí╡");
+                setupAction.setText("返回首页");
         }
         setupDetail.setVisibility(blank(setupDetail.getText().toString()) ? View.GONE : View.VISIBLE);
     }
 
     private String shortShizukuStatus() {
         String status = ShizukuTaskGate.get(this).status();
-        if (ShizukuTaskGate.get(this).hasPermission()) return "σ╖▓Φ┐₧µÄÑ";
+        if (ShizukuTaskGate.get(this).hasPermission()) return "已连接";
         // Full backend status stays in the diagnostics panel, not in the permission prompt.
-        if (status != null && (status.contains("µ£¬Φ┐ÉΦíî") || status.contains("µ£¬σ«ëΦúà") || status.contains("Σ╕ìσÅ»τö¿")))
-            return "σ░Üµ£¬Φ┐₧µÄÑ∩╝îΦ»╖σàêσÉ»σè¿ Shizuku";
-        return "τ¡ëσ╛àΦ┐₧µÄÑµêûµÄêµ¥â";
+        if (status != null && (status.contains("未运行") || status.contains("未安装") || status.contains("不可用")))
+            return "尚未连接，请先启动 Shizuku";
+        return "等待连接或授权";
     }
 
     private void performSetupAction() {
@@ -491,7 +441,6 @@ public class MainActivity extends Activity {
                 openSettings(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
                 break;
             case WAITING: break; // A refresh is never an automatic trip back into settings.
-            case NOTIFICATIONS: requestNotificationPermission(); break;
             default: setupVisible = false; currentPage = "home"; reviewMode = false;
         }
         refresh();
@@ -503,8 +452,6 @@ public class MainActivity extends Activity {
                 setupVisible = false; reviewMode = false; backStep = null; currentPage = "home";
             } else if (displayedStep == SetupFlowPolicy.Step.SOURCE) {
                 reviewMode = true; backStep = null;
-            } else if (displayedStep == SetupFlowPolicy.Step.NOTIFICATIONS) {
-                backStep = SetupFlowPolicy.Step.SCREENSHOT;
             } else if (displayedStep == SetupFlowPolicy.Step.WAITING) {
                 backStep = SetupFlowPolicy.Step.SCREENSHOT;
             } else {
@@ -533,15 +480,6 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void showPrivacy() {
-        new AlertDialog.Builder(this).setTitle("µê¬σ¢╛Σ╕ÄΘÜÉτºü")
-                .setMessage("µê¬σ¢╛µÿ»µò┤σ▒Åτö╗Θ¥ó∩╝îσêçµìóΘí╡Θ¥óπÇüΘÇÜτƒÑµêûΦªåτ¢ûσ▒éσÅ»Φâ╜Σ╜┐µê¬σ¢╛σîàσÉ½σà╢Σ╗ûσ║öτö¿µêûτ│╗τ╗ƒσåàσ«╣πÇéΦ»╖σàêσà│Θù¡µòÅµäƒΘí╡Θ¥óπÇé\n\n"
-                        + "µê¬σ¢╛Σ╕Ä OCR µûçσ¡ùσ£¿µ£¼µ£║Σ┐¥σ¡ÿ∩╝îΦ»åσê½σÉÄΣ╗ìΣ┐¥τòÖ∩╝îΣ╕ìΦç¬σè¿σêáΘÖñµêûΣ╕èΣ╝á∩╝îσÅ»µëïσè¿σ»╝σç║∩╝¢Φ»èµû¡σîàσÅ»Φâ╜σÉ½µÿ╡τº░τ¡ëµòÅµäƒΣ┐íµü»∩╝îΣ╗àΣ║ñτ╗ÖσÅ»Σ┐íΣ║║σæÿπÇéσü£µ¡óτ¢æµ╡ïΣ╝ÜµÜéσü£µê¬σ¢╛σÆîΘÿƒσêùσñäτÉå∩╝îΣ┐¥τòÖσ¢╛τëçΣ╕ÄµÅÉΘåÆπÇé\n\n"
-                        + "Σ╜┐τö¿µâàσå╡µ¿íσ╝ÅΣ╕ìΦâ╜σî║σêåσà╖Σ╜ôσ░Åµ╕╕µêÅ∩╝îΘªûµ¼íΘ¬îΦ»üµê¬σ¢╛σÅ»Φâ╜µÿ»σà╢Σ╗ûσ░Åµ╕╕µêÅµêûΘí╡Θ¥ó∩╝îΣ╣ƒΣ╝Üσ£¿µ£¼σ£░Σ┐¥τòÖπÇüσÅ»σ»╝σç║∩╝¢µûçσ¡ùτë╣σ╛üΣ╗àΣ╜£σÉ»σÅæσ╝Åσêñµû¡∩╝îΘ¬îΦ»üΘÇÜΦ┐çσÉÄΣ╗ìµùáµ│òµäƒτƒÑσ╛«Σ┐íσñìτö¿σ«╣σÖ¿σêçµìóσê░σà╢Σ╗ûσ░Åµ╕╕µêÅπÇéShizuku µ¿íσ╝Åµîëτ│╗τ╗ƒΣ╗╗σèíσêñµû¡∩╝îµö»µîüσ╖▓µÄêµ¥âτÜä Root / Shell∩╝îµ¥âΘÖÉΦîâσ¢┤µ¢┤σñº∩╝îRoot ΘúÄΘÖ⌐µ¢┤Θ½ÿπÇéΣ╕ìΦ»╗σÅûµùáΘÜ£τóìΦèéτé╣µêûτ¬ùσÅúσêùΦí¿∩╝îΣ╕ìτ¢æσÉ¼τòîΘ¥óΣ║ïΣ╗╢πÇéσëìσÅ░σêñµû¡σÆîµê¬σ¢╛σ╣╢Θ¥₧σÉîµù╢σ«îµêÉ∩╝îσñÜτ¬ùσÅúΣ╕ìσÅ»Θ¥á∩╝îΣ╕ìΦâ╜Σ┐¥Φ»üσÅ¬µê¬σå£σ£║µêûΘü┐σàìσ╛«Σ┐íΘúÄµÄºπÇé\n\n"
-                        + "Σ╕ìΣ╝ÜΦç¬σè¿τé╣σç╗σ╛«Σ┐íµêûµôìΣ╜£µ╕╕µêÅπÇéΣ╜┐τö¿µâàσå╡µ¿íσ╝ÅΦ┐¢σàÑσ░Åτ¿ïσ║ÅσÇÖΘÇëσÉÄ∩╝îΣ╗àµê¬ 1 σ╝áσ£¿µ£¼σ£░Θ¬îΦ»ü∩╝¢σî╣Θàìσå£σ£║σèáΦ╜╜Θí╡µêûΦç¬σ╖▒σ«╢σÉÄµëìµîüτ╗¡Φ«░σ╜ò∩╝îµ£¬σî╣ΘàìµêûΘ¬îΦ»üσñ▒Φ┤ÑσêÖµ£¼µ¼íσü£µ¡óµê¬σ¢╛πÇéΘÇÇσç║σ░Åτ¿ïσ║ÅσÉÄΘçìΦ┐¢∩╝îµêûµëïσè¿σü£µ¡óσåìσ╝Çσºï∩╝îσÅ»Θçìµû░Θ¬îΦ»üπÇéShizuku µ¿íσ╝ÅΣ╗ìµîëσå£σ£║τ│╗τ╗ƒΣ╗╗σèíµ¥íΣ╗╢µîüτ╗¡µê¬σ¢╛πÇéµÿ╡τº░µ£¬Φ»åσê½Σ╗ìσÅ»Φ«░σ╜òπÇéΘÇÜτƒÑπÇüµî»σè¿σÆîµÅÉΘåÆµù╢Θù┤σÅùµ¥âΘÖÉΣ╕Äτ│╗τ╗ƒΦ«╛τ╜«σ╜▒σôìπÇé")
-                .setPositiveButton("τƒÑΘüôΣ║å", null).show();
-    }
-
     private void requestDiagnosticsExport() {
         if (exportState.busy || exportState.picking) return;
         Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT)
@@ -554,11 +492,11 @@ public class MainActivity extends Activity {
         try { startActivityForResult(intent, EXPORT_DIAGNOSTICS); }
         catch (ActivityNotFoundException e) {
             exportState.picking = false;
-            exportState.message = "µ¡ñΦ«╛σñçΣ╕ìµö»µîüΘÇëµï⌐Σ┐¥σ¡ÿΣ╜ìτ╜«∩╝îµùáµ│òσ»╝σç║Φ»èµû¡σîàπÇé";
+            exportState.message = "此设备不支持选择保存位置，无法导出诊断包。";
             renderExportState();
         } catch (RuntimeException e) {
             exportState.picking = false;
-            exportState.message = "µùáµ│òµëôσ╝ÇΣ┐¥σ¡ÿΣ╜ìτ╜«ΘÇëµï⌐σÖ¿∩╝îΦ»╖τ¿ìσÉÄΘçìΦ»òπÇé";
+            exportState.message = "无法打开保存位置选择器，请稍后重试。";
             renderExportState();
         }
     }
@@ -569,7 +507,7 @@ public class MainActivity extends Activity {
         exportState.picking = false;
         Uri destination = data == null ? null : data.getData();
         if (resultCode != RESULT_OK || destination == null) {
-            exportState.message = "σ╖▓σÅûµ╢êσ»╝σç║∩╝îσ╖▓µ£ëµê¬σ¢╛σÆîΦ»åσê½Φ«░σ╜òΣ╗ìΣ┐¥τòÖπÇé";
+            exportState.message = "已取消导出，已有截图和识别记录仍保留。";
             renderExportState();
             return;
         }
@@ -579,20 +517,20 @@ public class MainActivity extends Activity {
         try {
             FarmAccessibilityService.exportDiagnostics(getApplicationContext(), destination, exportState);
         } catch (RuntimeException e) {
-            exportState.onFailure("σ»╝σç║σñ▒Φ┤Ñ");
+            exportState.onFailure("导出失败");
         }
     }
 
     private void renderExportState() {
         if (isFinishing() || isDestroyed()) return;
         exportButton.setEnabled(!exportState.busy && !exportState.picking);
-        exportButton.setText(exportState.busy ? "µ¡úσ£¿σ»╝σç║ΓÇª" : "σ»╝σç║ ZIP");
-        String message = exportState.busy ? "µ¡úσ£¿σ»╝σç║∩╝îΦ»╖τ¿ìσÇÖ∩╝¢Σ╕ìΣ╝Üµö╣σÅÿτ¢æµ╡ïτè╢µÇüπÇé"
-                : exportState.picking ? "Φ»╖ΘÇëµï⌐Φ»èµû¡σîàτÜäΣ┐¥σ¡ÿΣ╜ìτ╜«πÇé"
-                : exportState.message.isEmpty() ? "µùáΘ£ÇσÉ»σè¿τ¢æµ╡ïµêûσÉ»τö¿µùáΘÜ£τóìµ£ìσèíσì│σÅ»σ»╝σç║σ╖▓µ£ëΦ«░σ╜òπÇé"
+        exportButton.setText(exportState.busy ? "正在导出…" : "导出 ZIP");
+        String message = exportState.busy ? "正在导出，请稍候；不会改变监测状态。"
+                : exportState.picking ? "请选择诊断包的保存位置。"
+                : exportState.message.isEmpty() ? "无需启动监测或启用无障碍服务即可导出已有记录。"
                 : exportState.message;
         if (FarmAccessibilityService.getOcrProgress().hasUnsavedCapture)
-            message += "\nΦ┐ÿµ£ëµê¬σ¢╛µ£¬Σ┐¥σ¡ÿ∩╝îσÅ»Φâ╜Σ╕ìσ£¿Φ»èµû¡σîàσåà∩╝îσàêΘçìΦ»òΣ┐¥σ¡ÿ∩╝¢Φ»╖σï┐σà│Θù¡σ║öτö¿πÇé";
+            message += "\n还有截图未保存，可能不在诊断包内；请勿关闭应用，先处理保存错误。";
         exportStatus.setText(message);
     }
 
@@ -603,12 +541,12 @@ public class MainActivity extends Activity {
         private String message = "";
 
         @Override public void onSuccess(int frameCount) {
-            finish("σ╖▓σ»╝σç║" + frameCount + "σ╝áµê¬σ¢╛σÅèΦ»åσê½Φ«░σ╜ò"
-                    + (frameCount == 0 ? "∩╝êµùáµê¬σ¢╛∩╝îΣ╗àσÉ½Φ»èµû¡σàâµò░µì«∩╝ë" : ""));
+            finish("已导出" + frameCount + "张截图及识别记录"
+                    + (frameCount == 0 ? "（无截图，仅含诊断元数据）" : ""));
         }
 
         @Override public void onFailure(String ignored) {
-            finish("σ»╝σç║σñ▒Φ┤Ñ∩╝îΦ»╖µúÇµƒÑΣ┐¥σ¡ÿΣ╜ìτ╜«σÆîσÅ»τö¿τ⌐║Θù┤σÉÄΘçìΦ»òπÇéµ£¬σ«îµêÉτÜä ZIP σÅ»Φâ╜Σ╕ìσ«îµò┤∩╝îΦ»╖σï┐τö¿Σ║Äµá╕σ»╣πÇé");
+            finish("导出失败，请检查保存位置和可用空间后重试。未完成的 ZIP 可能不完整，请勿用于核对。");
         }
 
         private void finish(String result) {
@@ -648,10 +586,10 @@ public class MainActivity extends Activity {
                     .putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName()));
             return;
         }
-        new AlertDialog.Builder(this).setTitle("σ╝ÇσÉ»ΘÇÜτƒÑ")
-                .setMessage("τö¿Σ║ÄµêÉτåƒµÅÉΘåÆ∩╝¢Σ╕ìσ╝ÇσÉ»Σ╗ìσÅ»τ¢æµ╡ïπÇé")
-                .setNegativeButton("τ¿ìσÉÄ", null)
-                .setPositiveButton("τ╗ºτ╗¡", (d, w) -> requestNotificationPermission()).show();
+        new AlertDialog.Builder(this).setTitle("开启通知")
+                .setMessage("用于成熟提醒；不开启仍可监测。")
+                .setNegativeButton("稍后", null)
+                .setPositiveButton("继续", (d, w) -> requestNotificationPermission()).show();
     }
 
     private void requestNotificationPermission() {
@@ -672,8 +610,8 @@ public class MainActivity extends Activity {
     @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(requestCode, permissions, results);
         if (requestCode != NOTIFICATIONS) return;
-        if (results.length == 0) showMessage("σ╖▓σÅûµ╢êΘÇÜτƒÑµÄêµ¥â∩╝îσÅ»τ¿ìσÉÄσ£¿Φ«╛τ╜«Σ╕¡σ╝ÇσÉ»πÇé");
-        else if (!notificationsAllowed()) showMessage("ΘÇÜτƒÑµ£¬σ╝ÇσÉ»∩╝îΦ»åσê½Σ╗ìσÅ»Σ╜┐τö¿∩╝¢µÅÉΘåÆΘÇÜτƒÑσÆîµî»σè¿σÅ»Φâ╜σÅùΘÖÉπÇé");
+        if (results.length == 0) showMessage("已取消通知授权，可稍后在设置中开启。");
+        else if (!notificationsAllowed()) showMessage("通知未开启，识别仍可使用；提醒通知和振动可能受限。");
         else scheduler.rescheduleAll();
         refresh();
     }
@@ -682,7 +620,7 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 31) {
             openSettings(new Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
                     Uri.parse("package:" + getPackageName())));
-        } else showMessage("µ¡ñΦ«╛σñçσ╖▓µö»µîüτ▓╛τí«µÅÉΘåÆ∩╝îΣ╗ìσÅ»Φâ╜σÅùτ│╗τ╗ƒΦ«╛τ╜«σ╜▒σôì");
+        } else showMessage("此设备已支持精确提醒，仍可能受系统设置影响");
     }
 
     private void openSettings(Intent intent) {
@@ -691,7 +629,7 @@ public class MainActivity extends Activity {
             try { startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                     Uri.parse("package:" + getPackageName()))); }
             catch (ActivityNotFoundException | SecurityException ignored) {
-                showMessage("µùáµ│òµëôσ╝ÇΦ«╛τ╜«∩╝îΦ»╖σ£¿τ│╗τ╗ƒΦ«╛τ╜«Σ╕¡µë╛σê░µ£¼σ║öτö¿πÇé");
+                showMessage("无法打开设置，请在系统设置中找到本应用。");
             }
         }
     }
@@ -703,7 +641,7 @@ public class MainActivity extends Activity {
         } catch (ActivityNotFoundException | SecurityException | IllegalArgumentException e) {
             try { startActivity(new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)); }
             catch (ActivityNotFoundException | SecurityException | IllegalArgumentException ignored) {
-                showFeedback("µùáµ│òµëôσ╝ÇΣ╜┐τö¿µâàσå╡Φ«┐Θù«Φ«╛τ╜«∩╝îΦ»╖σ£¿τ│╗τ╗ƒΦ«╛τ╜«Σ╕¡µƒÑµë╛ΓÇ£Σ╜┐τö¿µâàσå╡Φ«┐Θù«µ¥âΘÖÉΓÇ¥σ╣╢σàüΦ«╕µ£¼σ║öτö¿πÇé");
+                showFeedback("无法打开使用情况访问设置，请在系统设置中查找“使用情况访问权限”并允许本应用。");
             }
         }
     }
@@ -714,7 +652,7 @@ public class MainActivity extends Activity {
         resumed = true;
         MonitorCoordinator.onVisible(this);
         try { scheduler.rescheduleAll(); }
-        catch (RuntimeException e) { showMessage("Θâ¿σêåµÅÉΘåÆµ£¬Φâ╜Θçìµû░σ«ëµÄÆ∩╝îΦ»╖µúÇµƒÑµ¥âΘÖÉπÇé"); }
+        catch (RuntimeException e) { showMessage("部分提醒未能重新安排，请检查权限。"); }
         handler.removeCallbacks(ticker);
         ticker.run();
     }
@@ -743,7 +681,6 @@ public class MainActivity extends Activity {
         boolean useShizuku = ShizukuTaskGate.isEnabled(this);
         boolean usageAllowed = !useShizuku && UsageAccessGate.hasPermission(this);
         boolean sourceReady = useShizuku ? ShizukuTaskGate.get(this).hasPermission() : usageAllowed;
-        boolean foregroundActive = monitor.foregroundActive;
         if (observingUserStart) {
             if (monitor.state == MonitorCoordinator.State.RUNNING && running) {
                 LifecycleDiagnostics.event(this, lifecycleAttempt, LifecycleHistory.Event.PENDING_CONFIRMED, LifecycleHistory.Reason.NONE, null);
@@ -754,8 +691,6 @@ public class MainActivity extends Activity {
                 observingUserStart = false;
             }
         }
-        foregroundStatus.setText("σëìσÅ░τ¢æµ╡ïµ£ìσèí ┬╖ " + (foregroundActive ? "Φ┐ÉΦíîΣ╕¡" : "µ£¬σÉ»σè¿")
-                + "\nτ¢æµ╡ïτè╢µÇü ┬╖ " + monitor.state.name() + " ┬╖ " + monitor.reason.name());
         boolean requiredReady = supported && sourceReady && enabled && connected;
         MonitorPresentation presentation = MonitorPresentation.from(monitor, supported, requiredReady);
         updatingMode = true;
@@ -764,62 +699,40 @@ public class MainActivity extends Activity {
         boolean modeEditable = presentation.modeEditable;
         usageMode.setEnabled(modeEditable);
         shizukuMode.setEnabled(modeEditable);
-        setOptionalText(modeHint, !modeEditable ? "Φ»╖σàêσü£µ¡óτ¢æµ╡ï∩╝îσåìσêçµìóµ¿íσ╝Å"
-                : !useShizuku && !usageAllowed ? "σ░Üµ£¬σàüΦ«╕Σ╜┐τö¿µâàσå╡Φ«┐Θù«" : "");
-        foregroundError.setVisibility(presentation.needsAttention ? View.VISIBLE : View.GONE);
-        foregroundError.setText(presentation.detail);
-        // Only confirmed problems belong beside the button; runtime status stays in Tools.
+        setOptionalText(modeHint, !modeEditable ? "请先停止监测，再切换模式"
+                : !useShizuku && !usageAllowed ? "尚未允许使用情况访问" : "");
+        // Only confirmed problems belong beside the button.
         String shizukuIssue = useShizuku ? ShizukuTaskGate.get(this).notificationIssue() : null;
         String monitorProblem = "";
         if (!supported) {
-            monitorProblem = "µê¬σ¢╛Θ£ÇΦªü Android 11 σÅèΣ╗ÑΣ╕èπÇé";
+            monitorProblem = "截图需要 Android 11 及以上。";
         } else if ("SHIZUKU_PERMISSION".equals(shizukuIssue)) {
-            monitorProblem = "Shizuku µÄêµ¥âΣ╕ìσÅ»τö¿∩╝îΦ»╖µúÇµƒÑµÄêµ¥âπÇé";
+            monitorProblem = "Shizuku 授权不可用，请检查授权。";
         } else if ("SHIZUKU_CONNECTION".equals(shizukuIssue)) {
-            monitorProblem = "Shizuku Φ┐₧µÄÑσ╖▓µû¡σ╝Ç∩╝îΦ»╖µúÇµƒÑµ£ìσèíπÇé";
+            monitorProblem = "Shizuku 连接已断开，请检查服务。";
         } else if (presentation.needsAttention) {
             // A suspended session still requires manual recovery even if its dependency recovered.
             monitorProblem = monitor.reason == MonitorCoordinator.Reason.SHIZUKU
-                    ? "τ¢æµ╡ïσ╖▓µÜéσü£∩╝îΦ»╖σü£µ¡óσÉÄΘçìµû░σ╝ÇσºïπÇé" : presentation.detail;
+                    ? "监测已暂停，请停止后重新开始。" : presentation.detail;
         } else if (monitor.state == MonitorCoordinator.State.STOPPED
                 && monitor.reason == MonitorCoordinator.Reason.SYSTEM_STOP) {
-            monitorProblem = "τ│╗τ╗ƒσ╖▓σü£µ¡óτ¢æµ╡ï∩╝îΦ»╖µëïσè¿σ╝ÇσºïπÇé";
+            monitorProblem = "系统已停止监测，请手动开始。";
         } else if (monitor.state == MonitorCoordinator.State.WAITING) {
             if (monitor.reason == MonitorCoordinator.Reason.ACCESSIBILITY && (!enabled || !connected))
-                monitorProblem = "µê¬σ¢╛µ£ìσèíµ£¬Φ┐₧µÄÑ∩╝îΦ»╖µúÇµƒÑµ¥âΘÖÉπÇé";
+                monitorProblem = "截图服务未连接，请检查权限。";
             else if (monitor.reason == MonitorCoordinator.Reason.SOURCE_PERMISSION && !useShizuku && !usageAllowed)
-                monitorProblem = "Σ╜┐τö¿µâàσå╡Φ«┐Θù«µ¥âΘÖÉσ╖▓σà│Θù¡∩╝îΦ»╖Θçìµû░µÄêµ¥âπÇé";
+                monitorProblem = "使用情况访问权限已关闭，请重新授权。";
         }
         setOptionalText(captureStatus, monitorProblem);
-        // The existing setup gate can hide the dashboard; retain a stop/retry affordance inside it too.
-        setupMonitorPanel.setVisibility(presentation.showStop ? View.VISIBLE : View.GONE);
-        setupMonitorStatus.setText(presentation.title + (presentation.detail.isEmpty() ? "" : "\n" + presentation.detail));
-        setupMonitorRetry.setVisibility(presentation.showStart ? View.VISIBLE : View.GONE);
-        setupMonitorRetry.setText(presentation.startLabel);
-        setupMonitorRetry.setEnabled(presentation.startEnabled);
-        setupMonitorStop.setVisibility(presentation.showStop ? View.VISIBLE : View.GONE);
-        OcrProgress progress = FarmAccessibilityService.getOcrProgress();
         renderExportState();
-        processingSummary.setText(ScreenPresentation.processingSummary(progress));
-        setOptionalText(ocrState, ScreenPresentation.processingNotice(progress));
-        queueDetails.setText(String.format(Locale.CHINA,
-                "σ╖▓σñäτÉå %d ┬╖ σ╛àσñäτÉå %d ┬╖ τòÖσ¡ÿ %d ┬╖ σñ▒Φ┤Ñ %d\nσÄåσÅ▓τ╝║σ¢╛/µ╕àτÉåΘí╣ %d ┬╖ %.1f MiB\nµÜéσü£σÄƒσ¢á %s ┬╖ σåÖσàÑ %s ┬╖ µ£¬Σ┐¥σ¡ÿ %s",
-                progress.processed, progress.queued, progress.archivedCount, progress.failedCount, progress.cleanupPendingCount,
-                progress.retainedBytes / (1024f * 1024f), progress.pauseReason, progress.writing, progress.hasUnsavedCapture));
-        retryButton.setVisibility(progress.retryAvailable ? View.VISIBLE : View.GONE);
-        retryButton.setEnabled(progress.retryAvailable);
-        String diagnostics = FarmAccessibilityService.diagnostics;
-        diagnosticsText.setText("τ¢æµ╡ïτè╢µÇü∩╝Ü" + FarmAccessibilityService.lastStatus
-                + (useShizuku ? "\nShizuku∩╝Ü" + ShizukuTaskGate.get(this).status() : "")
-                + "\n" + (blank(diagnostics) ? "µÜéµùáΦ»èµû¡µò░µì«" : diagnostics));
-        monitorButton.setText(presentation.showStop ? "σü£µ¡óτ¢æµ╡ï" : "σ╝Çσºïτ¢æµ╡ï");
+        monitorButton.setText(presentation.showStop ? "停止监测" : "开始监测");
         monitorButton.setEnabled(presentation.showStop || presentation.startEnabled);
         monitorButton.setAlpha(monitorButton.isEnabled() ? 1f : 0.55f);
         boolean notified = notificationsAllowed();
         notificationButton.setVisibility(notified ? View.GONE : View.VISIBLE);
         refreshNotificationSettings();
         boolean exact = scheduler.canScheduleExact();
-        exactButton.setText(exact ? "τ▓╛τí«Θù╣ΘÆƒ ┬╖ σ╖▓σ╝ÇσÉ»" : "τ▓╛τí«Θù╣ΘÆƒ ┬╖ µ£¬σ╝ÇσÉ»");
+        exactButton.setText(exact ? "精确闹钟 · 已开启" : "精确闹钟 · 未开启");
         exactHint.setVisibility(exact ? View.GONE : View.VISIBLE);
         renderNavigation();
         long now = System.currentTimeMillis();
@@ -835,7 +748,7 @@ public class MainActivity extends Activity {
         avatars.clearRows();
         reminders.removeAllViews();
         if (items.isEmpty()) return;
-        SimpleDateFormat date = new SimpleDateFormat("yyyyσ╣┤Mµ£êdµùÑ HH:mm:ss", Locale.CHINA);
+        SimpleDateFormat date = new SimpleDateFormat("yyyy年M月d日 HH:mm:ss", Locale.CHINA);
         for (ReminderGrouping.Group group : groups.active) {
             LinearLayout row = card(reminders, 10, Color.WHITE);
             if (group.reminders.size() == 1) {
@@ -847,10 +760,10 @@ public class MainActivity extends Activity {
                 allFired &= reminder.fired;
                 waiting |= !reminder.fired && reminder.triggerAt <= now;
             }
-            if (allFired || waiting) addText(row, allFired ? "σ╖▓µÅÉΣ║ñΘÇÜτƒÑ" : "τ¡ëσ╛àµÅÉΣ║ñΘÇÜτƒÑ", 12,
+            if (allFired || waiting) addText(row, allFired ? "已提交通知" : "等待提交通知", 12,
                     allFired ? MUTED : GREEN, true, 0);
             renderAvatarTime(row, group.anchor(), ReminderImagePresentation.plateRef(group.reminders),
-                    ReminderListGroups.summary(group), "µ£Çµù⌐µêÉτåƒ");
+                    ReminderListGroups.summary(group), "最早成熟");
             LinearLayout details = column();
             Button toggle = button(row, "", false, 10, () -> {});
             row.addView(details, spaced(-1, -2, 0));
@@ -862,30 +775,30 @@ public class MainActivity extends Activity {
             }
             boolean expanded = expandedGroups.contains(group.identity);
             details.setVisibility(expanded ? View.VISIBLE : View.GONE);
-            toggle.setText(expanded ? "µö╢Φ╡╖µÿÄτ╗å" : "µƒÑτ£ïµÿÄτ╗å");
-            toggle.setContentDescription((expanded ? "µö╢Φ╡╖ " : "µƒÑτ£ï ") + group.reminders.size() + " µ¥íµÅÉΘåÆµÿÄτ╗å");
+            toggle.setText(expanded ? "收起明细" : "查看明细");
+            toggle.setContentDescription((expanded ? "收起 " : "查看 ") + group.reminders.size() + " 条提醒明细");
             toggle.setOnClickListener(v -> {
                 boolean open = details.getVisibility() != View.VISIBLE;
                 if (open) expandedGroups.add(group.identity); else expandedGroups.remove(group.identity);
                 details.setVisibility(open ? View.VISIBLE : View.GONE);
-                toggle.setText(open ? "µö╢Φ╡╖µÿÄτ╗å" : "µƒÑτ£ïµÿÄτ╗å");
-                toggle.setContentDescription((open ? "µö╢Φ╡╖ " : "µƒÑτ£ï ") + group.reminders.size() + " µ¥íµÅÉΘåÆµÿÄτ╗å");
+                toggle.setText(open ? "收起明细" : "查看明细");
+                toggle.setContentDescription((open ? "收起 " : "查看 ") + group.reminders.size() + " 条提醒明细");
             });
         }
     }
 
     private void renderReminder(LinearLayout row, Reminder r, SimpleDateFormat date, long now) {
-        if (r.fired || r.triggerAt <= now) addText(row, r.fired ? "σ╖▓µÅÉΣ║ñΘÇÜτƒÑ" : "τ¡ëσ╛àµÅÉΣ║ñΘÇÜτƒÑ", 12,
+        if (r.fired || r.triggerAt <= now) addText(row, r.fired ? "已提交通知" : "等待提交通知", 12,
                 r.fired ? MUTED : GREEN, true, 0);
-        renderAvatarTime(row, r, r.plateRef, "", "µêÉτåƒ");
+        renderAvatarTime(row, r, r.plateRef, "", "成熟");
         addText(row, ScreenPresentation.schedule(r.matureAt, r.triggerAt), 12, MUTED, false, 5);
-        Button delete = button(row, "σêáΘÖñ", false, 10, () -> new AlertDialog.Builder(this)
-                .setTitle("σêáΘÖñµÅÉΘåÆ∩╝ƒ").setMessage("µêÉτåƒµù╢Θù┤∩╝Ü" + date.format(new Date(r.matureAt))
-                        + "\nΣ╗àσêáΘÖñΦ┐Öµ¥íΦ«░σ╜ò∩╝îµ£¬ΦºªσÅæτÜäµÅÉΘåÆσ░åσÅûµ╢êπÇé")
-                .setNegativeButton("Σ┐¥τòÖ", null).setPositiveButton("σêáΘÖñ", (d, w) -> {
+        Button delete = button(row, "删除", false, 10, () -> new AlertDialog.Builder(this)
+                .setTitle("删除提醒？").setMessage("成熟时间：" + date.format(new Date(r.matureAt))
+                        + "\n仅删除这条记录，未触发的提醒将取消。")
+                .setNegativeButton("保留", null).setPositiveButton("删除", (d, w) -> {
                     store.delete(r.id); refresh();
                 }).show());
-        delete.setContentDescription("σêáΘÖñ " + date.format(new Date(r.matureAt)) + " µêÉτåƒτÜäµÅÉΘåÆ");
+        delete.setContentDescription("删除 " + date.format(new Date(r.matureAt)) + " 成熟的提醒");
     }
 
     private void renderAvatarTime(LinearLayout row, Reminder reminder, String plateRef, String label, String timeLabel) {
@@ -905,7 +818,7 @@ public class MainActivity extends Activity {
         if (!blank(label)) addText(words, label, 12, MUTED, false, 0);
         addText(words, timeLabel + " " + new SimpleDateFormat("HH:mm:ss", Locale.CHINA)
                 .format(new Date(reminder.matureAt)), 20, INK, true, blank(label) ? 0 : 3);
-        addText(words, new SimpleDateFormat("yyyyσ╣┤Mµ£êdµùÑ", Locale.CHINA)
+        addText(words, new SimpleDateFormat("yyyy年M月d日", Locale.CHINA)
                 .format(new Date(reminder.matureAt)), 12, MUTED, false, 3);
         avatars.bindPlate(plate, plateRef);
     }
@@ -935,7 +848,7 @@ public class MainActivity extends Activity {
             b.setSelected(selected);
             b.setTextColor(selected ? Color.WHITE : GREEN);
             b.setBackground(background(selected ? GREEN : 0xFFF0F3EB, 12, 0));
-            b.setContentDescription(b.getText() + (selected ? "∩╝îσ╖▓ΘÇëµï⌐" : "∩╝îµ£¬ΘÇëµï⌐"));
+            b.setContentDescription(b.getText() + (selected ? "，已选择" : "，未选择"));
         }
     }
 
