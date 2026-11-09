@@ -34,7 +34,8 @@ final class MonitorNotificationPresentation {
         switch (reason) {
             case "ACCESSIBILITY": return "无障碍未连接";
             case "SOURCE_PERMISSION": return "来源权限失效";
-            case "SHIZUKU": return "Shizuku 未连接";
+            case "SHIZUKU_PERMISSION": return "Shizuku 授权不可用";
+            case "SHIZUKU_CONNECTION": return "Shizuku 连接中断";
             case "WRITE_FAILED":
             case "STORAGE_FAILED":
             case "STORAGE_ERROR": return "保存失败";

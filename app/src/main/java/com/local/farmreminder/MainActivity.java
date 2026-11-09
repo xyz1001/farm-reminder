@@ -44,14 +44,14 @@ public class MainActivity extends Activity {
     private static final int MUTED = 0xFF657367, PAPER = 0xFFF7F6EF;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final List<Button> leadButtons = new ArrayList<>();
-    private TextView runningLabel, captureStatus, diagnosticsText, feedback, exactHint, listTitle, restoreHint;
+    private TextView captureStatus, diagnosticsText, feedback, exactHint, listTitle;
     private TextView processingSummary, ocrState, queueDetails;
     private TextView foregroundStatus, foregroundError;
     private TextView modeHint;
     private RadioGroup modeChoices;
     private RadioButton usageMode, shizukuMode;
     private boolean updatingMode;
-    private Button startButton, stopButton, retryButton, notificationButton, exactButton;
+    private Button monitorButton, retryButton, notificationButton, exactButton;
     private Button exportButton;
     private TextView exportStatus;
     private TextView vibrationStatus, vibrationHint;
@@ -179,12 +179,14 @@ public class MainActivity extends Activity {
         homePage = column(); settingsPage = column(); toolsPage = column(); setupPage = column();
         page.addView(homePage); page.addView(settingsPage); page.addView(toolsPage); page.addView(setupPage);
         addText(homePage, "农场提醒", 30, INK, true, 0);
-        LinearLayout capture = card(homePage, 24, 0xFFE4EEDD);
-        runningLabel = addText(capture, "准备就绪", 26, INK, true, 0);
-        captureStatus = addText(capture, "", 14, MUTED, false, 8);
-        restoreHint = addText(capture, MonitorPresentation.RESTORE_HINT, 12, MUTED, false, 10);
-        startButton = button(capture, "开始监测", true, 22, this::requestMonitoring);
-        stopButton = button(capture, "停止监测", true, 22, this::requestStopMonitoring);
+        monitorButton = button(homePage, "开始监测", true, 24, () -> {
+            MonitorPresentation current = MonitorPresentation.from(MonitorCoordinator.getSnapshot(this),
+                    Build.VERSION.SDK_INT >= 30, SetupFlowPolicy.requiredReady(setupStep()));
+            if (current.showStop) requestStopMonitoring();
+            else requestMonitoring();
+        });
+        captureStatus = addText(homePage, "", 14, MUTED, false, 8);
+        captureStatus.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         listTitle = addText(homePage, "待提醒 0 组", 21, INK, true, 30);
         reminders = column(); homePage.addView(reminders, spaced(-1, -2, 8));
 
@@ -371,7 +373,8 @@ public class MainActivity extends Activity {
         observingUserStart = false;
         try {
             MonitorCoordinator.RequestResult result = MonitorForegroundService.requestStop(this);
-            showFeedback(MonitorPresentation.stopFeedback(result.code));
+            showFeedback(result.code == MonitorCoordinator.RequestCode.ACCEPTED
+                    ? "" : MonitorPresentation.stopFeedback(result.code));
         } catch (RuntimeException e) { showFeedback("停止请求未确认，请重试"); }
         refresh();
     }
@@ -765,12 +768,29 @@ public class MainActivity extends Activity {
                 : !useShizuku && !usageAllowed ? "尚未允许使用情况访问" : "");
         foregroundError.setVisibility(presentation.needsAttention ? View.VISIBLE : View.GONE);
         foregroundError.setText(presentation.detail);
-        runningLabel.setText(presentation.title);
-        String statusDetail = monitor.state == MonitorCoordinator.State.RUNNING && running
-                ? ScreenPresentation.runningDetail(FarmAccessibilityService.lastStatus, useShizuku) : presentation.detail;
-        if (!notificationsAllowed()) statusDetail += (statusDetail.isEmpty() ? "" : "\n") + "通知已关闭，提醒可能不可见。";
-        setOptionalText(captureStatus, statusDetail);
-        restoreHint.setVisibility(MonitorPresentation.showRestoreHint(monitor.enrolled, monitor.state, supported) ? View.VISIBLE : View.GONE);
+        // Only confirmed problems belong beside the button; runtime status stays in Tools.
+        String shizukuIssue = useShizuku ? ShizukuTaskGate.get(this).notificationIssue() : null;
+        String monitorProblem = "";
+        if (!supported) {
+            monitorProblem = "截图需要 Android 11 及以上。";
+        } else if ("SHIZUKU_PERMISSION".equals(shizukuIssue)) {
+            monitorProblem = "Shizuku 授权不可用，请检查授权。";
+        } else if ("SHIZUKU_CONNECTION".equals(shizukuIssue)) {
+            monitorProblem = "Shizuku 连接已断开，请检查服务。";
+        } else if (presentation.needsAttention) {
+            // A suspended session still requires manual recovery even if its dependency recovered.
+            monitorProblem = monitor.reason == MonitorCoordinator.Reason.SHIZUKU
+                    ? "监测已暂停，请停止后重新开始。" : presentation.detail;
+        } else if (monitor.state == MonitorCoordinator.State.STOPPED
+                && monitor.reason == MonitorCoordinator.Reason.SYSTEM_STOP) {
+            monitorProblem = "系统已停止监测，请手动开始。";
+        } else if (monitor.state == MonitorCoordinator.State.WAITING) {
+            if (monitor.reason == MonitorCoordinator.Reason.ACCESSIBILITY && (!enabled || !connected))
+                monitorProblem = "截图服务未连接，请检查权限。";
+            else if (monitor.reason == MonitorCoordinator.Reason.SOURCE_PERMISSION && !useShizuku && !usageAllowed)
+                monitorProblem = "使用情况访问权限已关闭，请重新授权。";
+        }
+        setOptionalText(captureStatus, monitorProblem);
         // The existing setup gate can hide the dashboard; retain a stop/retry affordance inside it too.
         setupMonitorPanel.setVisibility(presentation.showStop ? View.VISIBLE : View.GONE);
         setupMonitorStatus.setText(presentation.title + (presentation.detail.isEmpty() ? "" : "\n" + presentation.detail));
@@ -792,11 +812,9 @@ public class MainActivity extends Activity {
         diagnosticsText.setText("监测状态：" + FarmAccessibilityService.lastStatus
                 + (useShizuku ? "\nShizuku：" + ShizukuTaskGate.get(this).status() : "")
                 + "\n" + (blank(diagnostics) ? "暂无诊断数据" : diagnostics));
-        startButton.setVisibility(presentation.showStart ? View.VISIBLE : View.GONE);
-        startButton.setEnabled(presentation.startEnabled);
-        startButton.setAlpha(startButton.isEnabled() ? 1f : 0.55f);
-        startButton.setText(presentation.startLabel);
-        stopButton.setVisibility(presentation.showStop ? View.VISIBLE : View.GONE);
+        monitorButton.setText(presentation.showStop ? "停止监测" : "开始监测");
+        monitorButton.setEnabled(presentation.showStop || presentation.startEnabled);
+        monitorButton.setAlpha(monitorButton.isEnabled() ? 1f : 0.55f);
         boolean notified = notificationsAllowed();
         notificationButton.setVisibility(notified ? View.GONE : View.VISIBLE);
         refreshNotificationSettings();

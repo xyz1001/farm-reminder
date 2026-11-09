@@ -38,6 +38,8 @@ public final class ShizukuTaskGate {
     private IBinder pendingBinder;
     private ServiceConnection connection, cleanup;
     private String state = "UNKNOWN", key, component, reason = "not monitoring", status = "未监测";
+    // Current confirmed dependency failure, independent of the fail-closed task snapshot.
+    private String notificationIssue;
     // Observations are local and guarded by this gate's lock, not a global async trace.
     private String debugStage = "IDLE", debugReject = "none", debugException = "none";
     private String debugRemoteReason = "none", debugInvalidate = "INITIAL";
@@ -49,13 +51,14 @@ public final class ShizukuTaskGate {
         wakeControl();
     };
     private final Shizuku.OnBinderDeadListener dead = () -> {
-        synchronized (this) { permissionInvalid("Shizuku 已断开"); poll = true; }
+        synchronized (this) { permissionInvalid("Shizuku 已断开"); notificationIssue = "SHIZUKU_CONNECTION"; poll = true; }
         wakeControl();
     };
     private final Shizuku.OnRequestPermissionResultListener permission = (requestCode, grantResult) -> {
         if (requestCode != 4321) return;
         synchronized (this) {
             permissionInvalid(grantResult == PackageManager.PERMISSION_GRANTED ? "已授权，等待检查" : "未授权");
+            notificationIssue = grantResult == PackageManager.PERMISSION_GRANTED ? null : "SHIZUKU_PERMISSION";
             poll = true;
         }
         wakeControl();
@@ -112,13 +115,14 @@ public final class ShizukuTaskGate {
         if (!permissionFresh()) return "等待检查授权";
         return status;
     }
+    synchronized String notificationIssue() { return notificationIssue; }
     public void requestPermission() {
         synchronized (this) { request = true; }
         control.wake();
     }
     public void start() {
         synchronized (this) {
-            if (!active) { active = true; epoch++; invalidate("等待任务查询"); }
+            if (!active) { active = true; epoch++; invalidate("等待任务查询"); notificationIssue = null; }
             poll = true;
         }
         control.wake();
@@ -218,8 +222,8 @@ public final class ShizukuTaskGate {
                 } catch (RuntimeException e) { debugException(e); }
                 synchronized (this) {
                     if (epoch == run) {
-                        if (!ok) permissionInvalid(message);
-                        else { debugPermissionAt = SystemClock.elapsedRealtime(); authorization.grant(debugPermissionAt); if (service == null) status = message; }
+                        if (!ok) { permissionInvalid(message); notificationIssue = "等待授权".equals(message) ? "SHIZUKU_PERMISSION" : "SHIZUKU_CONNECTION"; }
+                        else { debugPermissionAt = SystemClock.elapsedRealtime(); authorization.grant(debugPermissionAt); if ("SHIZUKU_PERMISSION".equals(notificationIssue)) notificationIssue = null; if (service == null) status = message; }
                     }
                 }
             } else if (action == 5) {
@@ -230,7 +234,7 @@ public final class ShizukuTaskGate {
                     final long scheduledEpoch = run;
                     timer.schedule(() -> { synchronized (ShizukuTaskGate.this) {
                         if (ShizukuStartupPolicy.shouldTimeout(connection, scheduled, epoch, scheduledEpoch, active, binding)) {
-                            epoch++; invalidate("连接超时"); detach();
+                            epoch++; invalidate("连接超时"); detach(); notificationIssue = "SHIZUKU_CONNECTION";
                         }
                     } control.wake(); }, ShizukuStartupPolicy.STARTUP_BUDGET_MS, TimeUnit.MILLISECONDS);
                 }
@@ -242,8 +246,8 @@ public final class ShizukuTaskGate {
                 synchronized (this) {
                     if (ok) linkSuccess++;
                     if (connection == bind && epoch == run) {
-                        if (!ok) { epoch++; invalidate("服务已断开"); detach(); }
-                        else { binding = false; service = ITaskQuery.Stub.asInterface(link); invalidate("已连接，等待查询"); queryWanted = true; }
+                        if (!ok) { epoch++; invalidate("服务已断开"); detach(); notificationIssue = "SHIZUKU_CONNECTION"; }
+                        else { binding = false; service = ITaskQuery.Stub.asInterface(link); invalidate("已连接，等待查询"); notificationIssue = null; queryWanted = true; }
                     }
                 }
             } else {
@@ -259,7 +263,7 @@ public final class ShizukuTaskGate {
                     boolean valid = query.finish(token, SystemClock.elapsedRealtime() - queryStart);
                     if (!valid) { debugReject = "TOKEN"; continue; }
                     if (!active || epoch != run || service != target || !isEnabled(context)) { debugReject = "EPOCH"; continue; }
-                    if (result == null) { debugReject = "NULL_OR_EXCEPTION"; permissionInvalid("查询失败或超时"); continue; }
+                    if (result == null) { debugReject = "NULL_OR_EXCEPTION"; permissionInvalid("查询失败或超时"); notificationIssue = "SHIZUKU_CONNECTION"; continue; }
                     if (!permissionFresh()) { debugReject = "PERMISSION_STALE"; continue; }
                     String value = result.getString("state", "UNKNOWN");
                     String k = result.getString("key"), c = result.getString("component");
@@ -274,7 +278,7 @@ public final class ShizukuTaskGate {
     }
     private void disconnected(ServiceConnection old) {
         synchronized (this) {
-            if (connection == old) { epoch++; invalidate("服务已断开"); detach(); }
+            if (connection == old) { epoch++; invalidate("服务已断开"); detach(); notificationIssue = "SHIZUKU_CONNECTION"; }
         }
         control.wake();
     }

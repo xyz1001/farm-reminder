@@ -27,17 +27,17 @@ public class MonitorNotificationPresentationTest {
 
     @Test public void routineWaitingAndScreenStatesAddNoStatusOrError() {
         for (String reason : new String[]{"NONE", "LOCKED", "NOT_TARGET", "STOPPED", "BUSY",
-                "USER_STOP", "NOT_FOREGROUND", "USAGE_VERIFY_PENDING"}) {
+                "USER_STOP", "NOT_FOREGROUND", "USAGE_VERIFY_PENDING", "SHIZUKU", "UNKNOWN", "NON_MATCH"}) {
             assertEquals("已处理 7 张 · 待处理 0 张",
                     MonitorNotificationPresentation.content(progress(7, 0, false, reason), reason));
         }
     }
 
     @Test public void currentErrorsUseOneShortMessageWithoutRepeatingTitle() {
-        String[] reasons = {"ACCESSIBILITY", "SOURCE_PERMISSION", "SHIZUKU", "WRITE_FAILED",
+        String[] reasons = {"ACCESSIBILITY", "SOURCE_PERMISSION", "SHIZUKU_PERMISSION", "SHIZUKU_CONNECTION", "WRITE_FAILED",
                 "STORAGE_FAILED", "STORAGE_ERROR", "LOW_SPACE", "WATCHDOG", "OCR_TIMEOUT",
                 "CAPTURE_TIMEOUT", "ENGINE_FATAL"};
-        String[] words = {"无障碍未连接", "来源权限失效", "Shizuku 未连接", "保存失败",
+        String[] words = {"无障碍未连接", "来源权限失效", "Shizuku 授权不可用", "Shizuku 连接中断", "保存失败",
                 "保存失败", "保存失败", "存储空间不足", "任务超时", "任务超时", "任务超时", "识别服务异常"};
         for (int i = 0; i < reasons.length; i++) {
             String content = MonitorNotificationPresentation.content(progress(7, 0, false, reasons[i]), reasons[i]);
@@ -49,6 +49,16 @@ public class MonitorNotificationPresentationTest {
     @Test public void currentDependencyErrorTakesPriorityOverProgressError() {
         assertEquals("已处理 7 张 · 待处理 0 张 · 无障碍未连接",
                 MonitorNotificationPresentation.content(progress(7, 0, false, "WRITE_FAILED"), "ACCESSIBILITY"));
+    }
+
+    @Test public void broadShizukuPauseDoesNotOverrideCurrentCaptureErrorOrSurviveRecovery() {
+        OcrProgress paused = progress(7, 0, false, "SHIZUKU");
+        assertEquals("已处理 7 张 · 待处理 0 张 · 截图失败",
+                MonitorNotificationPresentation.content(paused, null, ContainerCapturePolicy.CaptureIssue.SCREENSHOT_FAILED));
+        assertEquals("已处理 7 张 · 待处理 0 张 · Shizuku 连接中断",
+                MonitorNotificationPresentation.content(paused, "SHIZUKU_CONNECTION"));
+        assertEquals("已处理 7 张 · 待处理 0 张",
+                MonitorNotificationPresentation.content(paused, null));
     }
 
     @Test public void storageErrorStillAppearsWhenScreenIsLockedOrOutsideTarget() {

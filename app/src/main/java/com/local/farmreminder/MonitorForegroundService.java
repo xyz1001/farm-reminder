@@ -129,14 +129,18 @@ public class MonitorForegroundService extends Service {
             } catch (RuntimeException ignored) { }
             boolean ready = false;
             MonitorCoordinator.Reason wait = MonitorCoordinator.Reason.ACCESSIBILITY;
+            String notificationIssue = null;
             if (shizuku) {
                 ShizukuTaskGate gate = ShizukuTaskGate.get(MonitorForegroundService.this);
                 if (!observingShizuku) { gate.start(); observingShizuku = true; }
                 ShizukuTaskGate.Snapshot snapshot = gate.snapshot();
                 if (!gate.hasPermission() || "UNKNOWN".equals(snapshot.state) || snapshot.age > 1500) wait = MonitorCoordinator.Reason.SHIZUKU;
                 else if (FarmAccessibilityService.isConnected) ready = true;
+                notificationIssue = gate.notificationIssue();
             } else if (!UsageAccessGate.hasPermission(MonitorForegroundService.this)) wait = MonitorCoordinator.Reason.SOURCE_PERMISSION;
             else if (FarmAccessibilityService.isConnected) ready = true;
+            if (!FarmAccessibilityService.isConnected) notificationIssue = "ACCESSIBILITY";
+            else if (!shizuku && wait == MonitorCoordinator.Reason.SOURCE_PERMISSION) notificationIssue = "SOURCE_PERMISSION";
             if (FarmAccessibilityService.isRunning) {
                 if (!FarmAccessibilityService.isConnected) { FarmAccessibilityService.setMonitoring(MonitorForegroundService.this, false); ready = false; wait = MonitorCoordinator.Reason.ACCESSIBILITY; }
                 else if (ready) {
@@ -156,8 +160,7 @@ public class MonitorForegroundService extends Service {
                 }
             }
             String content = MonitorNotificationPresentation.content(FarmAccessibilityService.getOcrProgress(),
-                    ready ? null : wait.name(), ready ? FarmAccessibilityService.currentCaptureIssue()
-                            : ContainerCapturePolicy.CaptureIssue.NONE);
+                    notificationIssue, FarmAccessibilityService.currentCaptureIssue());
             if (!content.equals(lastContent)) {
                 NotificationManager manager = getSystemService(NotificationManager.class);
                 if (manager != null) manager.notify(NOTIFICATION_ID, notification(content));
