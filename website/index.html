@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>农场提醒 (Farm Reminder) - 纯本地离线·零封号风险的作物成熟提醒工具</title>
+  <meta name="description" content="专为微信小程序《QQ经典农场》打造的成熟提醒工具。纯本地离线文字识别、零数据上传、不模拟点击、不代收代偷，绝无封号风险。">
+  <meta name="keywords" content="QQ经典农场,农场提醒,作物成熟提醒,收菜闹钟,微信小游戏辅助,纯本地OCR,Shizuku,Android">
+  <link rel="icon" type="image/png" href="assets/favicon.png">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <!-- 顶部导航 -->
+  <header class="navbar">
+    <div class="container nav-container">
+      <a href="#" class="brand">
+        <img src="assets/logo.png" alt="农场提醒 Logo" class="brand-logo">
+        <span class="brand-name">农场提醒 <span class="brand-badge">Farm Reminder</span></span>
+      </a>
+      <nav class="nav-links">
+        <a href="#features">核心特性</a>
+        <a href="#security">安全对比</a>
+        <a href="#guide">使用指引</a>
+        <a href="#faq">常见问题</a>
+        <a href="https://github.com/xyz1001/farm-reminder" target="_blank" rel="noopener" class="nav-github" title="查看 GitHub 开源仓库">
+          <svg class="icon-svg" viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+            <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+          </svg>
+          <span>GitHub</span>
+        </a>
+      </nav>
+      <div class="nav-cta">
+        <a href="#download" class="btn btn-sm btn-primary">立即下载</a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Hero 首屏区域 -->
+  <section class="hero-section">
+    <div class="container hero-container">
+      <div class="hero-content">
+        <div class="tag-badge-group">
+          <span class="pill pill-green">🍃 纯本地离线</span>
+          <span class="pill pill-blue">🛡️ 绝无封号风险</span>
+          <span class="pill pill-outline">📱 Android 11+</span>
+        </div>
+        <h1 class="hero-title">
+          专为微信小程序《QQ经典农场》<br>
+          打造的<span class="gradient-text">作物成熟智能提醒工具</span>
+        </h1>
+        <p class="hero-subtitle">
+          纯屏幕文字只读识别 · 本地端侧 Google ML Kit OCR · 绝无网络权限 · 不代收不偷菜 · 安全护航游戏账号
+        </p>
+
+        <div class="hero-actions" id="download">
+          <button id="btn-download-apk" class="btn btn-lg btn-primary" onclick="handleDownloadClick()">
+            <svg class="icon-svg" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+            <span>下载 Android 安装包</span>
+            <span class="version-tag">最新版</span>
+          </button>
+          <a href="https://github.com/xyz1001/farm-reminder" target="_blank" rel="noopener" class="btn btn-lg btn-secondary">
+            <svg class="icon-svg" viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+              <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+            </svg>
+            <span>GitHub 源码仓库</span>
+          </a>
+        </div>
+        <p class="download-tip">
+          <svg class="icon-sm" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+          零网络权限 · 纯离线运算 · 支持 Android 11 及以上设备
+        </p>
+      </div>
+
+      <div class="hero-preview">
+        <div class="phone-card">
+          <div class="phone-card-header">
+            <span class="status-dot"></span>
+            <span class="card-title">农场成熟提醒通知卡片预览</span>
+          </div>
+          <div class="notification-sample">
+            <div class="notif-header">
+              <img src="assets/logo.png" alt="App Icon" class="notif-icon">
+              <span class="notif-app-name">农场提醒 · 成熟提醒</span>
+              <span class="notif-time">刚刚</span>
+            </div>
+            <div class="notif-title">🍎 好友农场即将成熟</div>
+            <div class="notif-body">
+              【张三的农田】红土地种植的「金银花」将在 <strong>1 分钟后</strong> 成熟，请及时前往收菜！
+            </div>
+            <div class="notif-action-btn">
+              <span>一键进入微信</span>
+            </div>
+          </div>
+          <div class="mini-feature-list">
+            <div class="mini-feature-item">
+              <span class="check-icon">✓</span> 纯只读识别，不干扰游戏
+            </div>
+            <div class="mini-feature-item">
+              <span class="check-icon">✓</span> 离线沙盒，数据不出手机
+            </div>
+            <div class="mini-feature-item">
+              <span class="check-icon">✓</span> 提前响铃，准点防被偷
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 核心优势卡片 -->
+  <section class="section" id="features">
+    <div class="container">
+      <div class="section-header text-center">
+        <h2 class="section-title">为什么选择「农场提醒」？</h2>
+        <p class="section-desc">专注把“自动看时间并定闹钟”这一件事做到极致，绝不触碰外挂红线</p>
+      </div>
+
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon-box green">
+            <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+            </svg>
+          </div>
+          <h3 class="feature-title">100% 纯本地离线</h3>
+          <p class="feature-text">
+            设备端内置 Google ML Kit 离线文字识别引擎，全程离线运算。应用<strong>不声明网络权限（INTERNET）</strong>，哪怕在飞行模式下依然正常工作，真正做到零数据上传。
+          </p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon-box blue">
+            <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+            </svg>
+          </div>
+          <h3 class="feature-title">绝无游戏封号风险</h3>
+          <p class="feature-text">
+            纯屏幕文字只读识别，<strong>不模拟点击、不代收代偷、不注入游戏代码、不拦截网络封包</strong>。本质是一个“能看懂倒计时的贴心闹钟”，符合公平游戏原则。
+          </p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon-box purple">
+            <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <polyline points="12 6 12 12 16 14"></polyline>
+            </svg>
+          </div>
+          <h3 class="feature-title">准时与提前智能提醒</h3>
+          <p class="feature-text">
+            支持精确到期、提前 1 分钟（默认）、3 分钟、5 分钟智能提醒；调用系统原生高优先级悬浮横幅与振动，点击卡片一键直达微信，抢收快人一步。
+          </p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon-box teal">
+            <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+              <line x1="8" y1="21" x2="16" y2="21"></line>
+              <line x1="12" y1="17" x2="12" y2="21"></line>
+            </svg>
+          </div>
+          <h3 class="feature-title">双监测模式 · 极轻量</h3>
+          <p class="feature-text">
+            提供开箱即用的<strong>「使用情况模式」</strong>与高阶极速的<strong>「Shizuku 模式」</strong>。识别完成后即时释放计算资源，不常驻多余占用，省电低功耗。
+          </p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon-box orange">
+            <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+              <circle cx="12" cy="7" r="4"></circle>
+            </svg>
+          </div>
+          <h3 class="feature-title">好友铭牌与等级呈现</h3>
+          <p class="feature-text">
+            识别成熟倒计时的同时自动抓取好友头像与等级徽章，提醒列表图文并茂、清晰直观，一眼即可分清是谁的农田即将成熟。
+          </p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon-box gray">
+            <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="21 8 21 21 3 21 3 8"></polyline>
+              <rect x="1" y="3" width="22" height="5"></rect>
+              <line x1="10" y1="12" x2="14" y2="12"></line>
+            </svg>
+          </div>
+          <h3 class="feature-title">数据透明 · 隐私完全自主</h3>
+          <p class="feature-text">
+            所有截图与提醒日程仅保留在本机私有沙盒存储中。应用支持一键打包导出本地诊断包查验，卸载即完全销毁，不留任何残留。
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 本应用 vs 传统外挂 对比表格 -->
+  <section class="section bg-alt" id="security">
+    <div class="container">
+      <div class="section-header text-center">
+        <h2 class="section-title">安全与隐私声明</h2>
+        <p class="section-desc">为什么使用「农场提醒」完全不用担心封号与隐私泄露？</p>
+      </div>
+
+      <div class="compare-card">
+        <div class="table-responsive">
+          <table class="compare-table">
+            <thead>
+              <tr>
+                <th style="width: 22%;">关注维度</th>
+                <th style="width: 39%;" class="highlight-col">✨ 农场提醒 (本应用)</th>
+                <th style="width: 39%;">⚠️ 传统外挂 / 脚本 / 挂机助手</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>封号风险</strong></td>
+                <td class="highlight-col safe">
+                  <strong>零风险</strong><br>
+                  纯屏幕文字只读识别，不模拟点击、不代收代偷、不注入游戏代码，完全由玩家手动收菜，符合公平游戏原则。
+                </td>
+                <td class="danger">
+                  <strong>极高风险</strong><br>
+                  模拟点击、内存注入、协议挂机代偷，极易触发官方行为风控与行为特征检测，导致封号。
+                </td>
+              </tr>
+              <tr>
+                <td><strong>数据隐私</strong></td>
+                <td class="highlight-col safe">
+                  <strong>零上传 · 100% 离线</strong><br>
+                  内置离线 OCR 识别引擎，<strong>无网络权限声明</strong>、无任何联网上报接口、无第三方统计 SDK。
+                </td>
+                <td class="danger">
+                  <strong>隐患极大</strong><br>
+                  通常要求登录第三方账号、上传截图至云端服务器解析、甚至收集设备隐私信息。
+                </td>
+              </tr>
+              <tr>
+                <td><strong>系统功耗</strong></td>
+                <td class="highlight-col safe">
+                  <strong>极轻量 · 低功耗</strong><br>
+                  专注看时间并定闹钟，识别完毕即时释放计算资源，不常驻冗余后台任务，流畅省电。
+                </td>
+                <td class="danger">
+                  <strong>臃肿耗电</strong><br>
+                  长期常驻悬浮窗、滥用无障碍全量事件监听、持续循环消耗手机运存与电池。
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3步上手指南 -->
+  <section class="section" id="guide">
+    <div class="container">
+      <div class="section-header text-center">
+        <h2 class="section-title">三步快速上手</h2>
+        <p class="section-desc">无缝融入日常游戏习惯，简单三步即可安享准点收菜</p>
+      </div>
+
+      <div class="steps-grid">
+        <div class="step-card">
+          <div class="step-num">01</div>
+          <h3 class="step-title">选择模式并授权</h3>
+          <p class="step-desc">
+            初次启动选择前台监测模式（推荐新手的“使用情况模式”或高阶的“Shizuku 模式”），并开启系统的「无障碍截图服务」。
+          </p>
+        </div>
+
+        <div class="step-card">
+          <div class="step-num">02</div>
+          <h3 class="step-title">进入农场看倒计时</h3>
+          <p class="step-desc">
+            启动监测后打开微信《QQ经典农场》，像平时一样点击作物调出成熟倒计时，应用即自动识别并建立闹钟。
+          </p>
+        </div>
+
+        <div class="step-card">
+          <div class="step-num">03</div>
+          <h3 class="step-title">到期提醒快速收菜</h3>
+          <p class="step-desc">
+            临近成熟前（默认提前 1 分钟），系统弹出高优先级悬浮横幅通知，点击卡片直接一键唤醒微信收菜。
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 常见问题 FAQ -->
+  <section class="section bg-alt" id="faq">
+    <div class="container">
+      <div class="section-header text-center">
+        <h2 class="section-title">常见问题解答 (FAQ)</h2>
+        <p class="section-desc">解答您在安装与使用过程中的疑虑</p>
+      </div>
+
+      <div class="faq-accordion">
+        <details class="faq-item">
+          <summary class="faq-question">
+            <span>这款应用真的不会导致游戏封号吗？</span>
+            <span class="faq-icon">+</span>
+          </summary>
+          <div class="faq-answer">
+            <p><strong>绝无封号风险。</strong>游戏官方风控主要打击的是：修改封包数据、内存挂机、自动模拟点击偷菜等破坏游戏平衡的外挂行为。而「农场提醒」本质上只是一个<strong>“能看懂屏幕文字的定时便签闹钟”</strong>，不向微信/游戏发送任何非法请求，不执行任何自动化代收操作，与您自己看表定闹钟原理完全一致。</p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary class="faq-question">
+            <span>屏幕截图会不会泄露隐私或被上传？</span>
+            <span class="faq-icon">+</span>
+          </summary>
+          <div class="faq-answer">
+            <p><strong>绝无数据上传。</strong></p>
+            <ol>
+              <li>应用内置 Google ML Kit 离线识别引擎，文字解析 100% 在本机 CPU/NPU 上运算，完全不需要网络。</li>
+              <li>应用清单文件（Manifest）中<strong>完全没有声明 <code>android.permission.INTERNET</code> 权限</strong>，在操作系统层面就无法向外发送任何数据。</li>
+              <li>截图仅保存在手机应用私有的沙盒存储内，卸载应用或在系统设置中“清除数据”即可彻底销毁。</li>
+            </ol>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary class="faq-question">
+            <span>息屏或切到后台后，收不到通知提醒怎么办？</span>
+            <span class="faq-icon">+</span>
+          </summary>
+          <div class="faq-answer">
+            <p>国产定制系统（如小米 HyperOS、华为/荣耀 HarmonyOS、OPPO ColorOS、vivo OriginOS 等）后台保活较为严格，请确保进行如下设置：</p>
+            <ul>
+              <li><strong>放行省电策略</strong>：在系统设置中将「农场提醒」电池优化设为“无限制 / 允许后台高耗电”，并允许自启动。</li>
+              <li><strong>允许精确闹钟</strong>：Android 12 及以上系统请开启本应用的“闹钟与提醒”权限。</li>
+              <li><strong>通知横幅级别</strong>：确认通知设置中，「成熟提醒」渠道的重要性已设为“高/紧急”（开启横幅和振动权限）。</li>
+            </ul>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary class="faq-question">
+            <span>进入好友农场后，为什么没有自动生成提醒？</span>
+            <span class="faq-icon">+</span>
+          </summary>
+          <div class="faq-answer">
+            <ul>
+              <li><strong>必须调出倒计时弹窗</strong>：请确保点击了作物，屏幕上展示了完整的成熟倒计时文本（如“xx:xx:xx后成熟”）。</li>
+              <li><strong>首图加载确认</strong>：在“使用情况模式”下，刚进入农场时应用会通过首图确认当前是否为农场页面，建议进农场后稍等 1 秒再开始切好友。</li>
+              <li><strong>无障碍服务状态</strong>：若无障碍被系统误杀，回到应用首页按提示重新开启无障碍即可。</li>
+            </ul>
+          </div>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- 页脚 -->
+  <footer class="footer">
+    <div class="container footer-container">
+      <div class="footer-left">
+        <div class="footer-brand">
+          <img src="assets/logo.png" alt="Logo" class="footer-logo">
+          <span>农场提醒 · Farm Reminder</span>
+        </div>
+        <p class="footer-disclaimer">
+          声明：本软件为开源免费的个人学习与辅助工具，与腾讯公司及《QQ经典农场》官方无任何关联或商业合作。请合理安排游戏时间。
+        </p>
+      </div>
+      <div class="footer-right">
+        <div class="footer-links">
+          <a href="https://github.com/xyz1001/farm-reminder" target="_blank" rel="noopener">GitHub 仓库</a>
+          <a href="https://github.com/xyz1001/farm-reminder/releases" target="_blank" rel="noopener">版本发布 (Releases)</a>
+          <a href="https://github.com/xyz1001/farm-reminder/issues" target="_blank" rel="noopener">问题反馈 (Issues)</a>
+        </div>
+        <div class="footer-copyright">
+          &copy; 2026 Farm Reminder. All rights reserved.
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <!-- 弹窗提示 Modal (下载链接占位时提示) -->
+  <div id="download-modal" class="modal-backdrop" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 class="modal-title">安装包获取提示</h3>
+        <button class="modal-close" onclick="closeDownloadModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-icon">📦</div>
+        <p class="modal-desc">
+          最新版安装包即将发布！您可以直接前往 <strong>GitHub Releases</strong> 获取官方签名构建包或关注更新。
+        </p>
+        <div class="modal-actions">
+          <a href="https://github.com/xyz1001/farm-reminder/releases" target="_blank" rel="noopener" class="btn btn-primary" onclick="closeDownloadModal()">前往 GitHub Releases 下载</a>
+          <button class="btn btn-secondary" onclick="closeDownloadModal()">稍后再看</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/main.js"></script>
+</body>
+</html>
