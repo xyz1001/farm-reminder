@@ -199,7 +199,7 @@ public class MainActivity extends Activity {
         vibrationHint = notificationSettingsHint(notificationSettings);
         LinearLayout timing = card(settingsPage, 16, Color.WHITE);
         addText(timing, "提前多久提醒", 18, INK, true, 0);
-        addText(timing, "仅对新记录生效", 12, MUTED, false, 7);
+        addText(timing, "修改后将同步更新未发送的提醒。", 12, MUTED, false, 7);
         LinearLayout choices = new LinearLayout(this);
         timing.addView(choices, spaced(-1, -2, 13));
         int[] values = {0, 60, 180, 300};
@@ -213,9 +213,10 @@ public class MainActivity extends Activity {
             choices.addView(choice, lp);
             leadButtons.add(choice);
             choice.setOnClickListener(v -> {
-                leadSeconds = value;
-                settings.edit().putInt("leadSeconds", value).apply();
+                boolean completed = new ReminderStore(this).updateLead(value);
+                leadSeconds = settings.getInt("leadSeconds", 60);
                 updateLeadButtons();
+                if (!completed) showMessage("提醒设置未完成，请重试");
             });
         }
         updateLeadButtons();

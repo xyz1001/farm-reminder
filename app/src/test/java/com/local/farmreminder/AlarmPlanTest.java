@@ -118,4 +118,27 @@ public class AlarmPlanTest {
             assertEquals(Long.valueOf(group.anchor().triggerAt), backend.alarms.get(group.identity));
         }
     }
+    @Test public void changedLeadReplacesAlarmAndRejectsOldBroadcastUntilNewDue() {
+        State s = new State(); Reminder r = reminder("a", 1000000, 700000);
+        s.items.add(r); s.reconcile(); String old = ReminderGrouping.plan(s.items).get(0).identity;
+        ReminderLeadPolicy.update(s.items, 180); s.reconcile();
+        String next = ReminderGrouping.plan(s.items).get(0).identity;
+        assertNotEquals(old, next); assertFalse(s.backend.alarms.containsKey(old));
+        assertEquals(Collections.singleton(next), s.backend.alarms.keySet());
+        assertEquals(Long.valueOf(820000), s.backend.alarms.get(next));
+        assertFalse(s.deliver(old, 700000)); assertEquals(0, s.notifications);
+        assertFalse(s.deliver(next, 800000)); assertEquals(0, s.notifications);
+        assertTrue(s.deliver(next, 820000)); assertEquals(1, s.notifications);
+        assertFalse(s.deliver(next, 820001)); assertEquals(1, s.notifications);
+    }
+    @Test public void earlierLeadSchedulesAlreadyDueAndSameLeadDoesNotDuplicate() {
+        State s = new State(); Reminder r = reminder("a", 1000000, 940000);
+        s.items.add(r); s.reconcile(); ReminderLeadPolicy.update(s.items, 300); s.reconcile();
+        String id = ReminderGrouping.plan(s.items).get(0).identity;
+        int attempts = s.backend.attempts;
+        ReminderLeadPolicy.update(s.items, 300); s.reconcile();
+        assertEquals(attempts, s.backend.attempts); assertEquals(1, s.backend.alarms.size());
+        assertEquals(Long.valueOf(700000), s.backend.alarms.get(id));
+        assertTrue(s.deliver(id, 800000)); assertEquals(1, s.notifications);
+    }
 }

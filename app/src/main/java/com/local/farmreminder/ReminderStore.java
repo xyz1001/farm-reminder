@@ -51,6 +51,41 @@ public class ReminderStore {
         return a.toString();
     }
     private boolean write(List<Reminder> items) throws Exception { return commit(prefs.edit().putString("items", serialize(items))); }
+    boolean updateLead(int seconds) { synchronized (LOCK) {
+        if (!ReminderLeadPolicy.valid(seconds)) return false;
+        SharedPreferences settings = context.getSharedPreferences("settings", Context.MODE_PRIVATE);
+        String previousItems = null;
+        int previousLead = settings.getInt("leadSeconds", 60);
+        boolean settingsAttempted = false;
+        try {
+            if (!repairIfDirty()) return false;
+            List<Reminder> items = readStrict();
+            previousItems = prefs.getString("items", "[]");
+            ReminderLeadPolicy.update(items, seconds);
+            if (!write(items)) {
+                commit(prefs.edit().putString("items", previousItems));
+                return false;
+            }
+            settingsAttempted = true;
+            if (!settings.edit().putInt("leadSeconds", seconds).commit()) {
+                settings.edit().putInt("leadSeconds", previousLead).commit();
+                commit(prefs.edit().putString("items", previousItems));
+                return false;
+            }
+            try { new AlarmScheduler(context).rescheduleAll(); } catch (RuntimeException e) {
+                Log.w("FarmReminder", "Lead updated but alarm reconciliation failed", e);
+                return false;
+            }
+            return true;
+        } catch (Exception e) {
+            Log.w("FarmReminder", "Lead update failed", e);
+            try {
+                if (settingsAttempted) settings.edit().putInt("leadSeconds", previousLead).commit();
+                if (previousItems != null) commit(prefs.edit().putString("items", previousItems));
+            } catch (RuntimeException rollback) { Log.w("FarmReminder", "Lead rollback failed", rollback); }
+            return false;
+        }
+    } }
     public int pruneExpired(long now) { synchronized (LOCK) {
         return ReminderRetentionPolicy.prune(new ReminderRetentionPolicy.Storage() {
             public boolean repair() { return repairIfDirty(); }
@@ -179,8 +214,10 @@ public class ReminderStore {
     FrameOutcome commitFrame(DiskFrameStore.Frame frame, List<Long> countdownMs, int leadSeconds, String avatarRef, String plateRef) {
         synchronized (LOCK) {
             if (frame == null) return new FrameOutcome(false, false, false, false, java.util.Collections.emptyList(), "STORAGE_FAILED");
+            int currentLead = context.getSharedPreferences("settings", Context.MODE_PRIVATE).getInt("leadSeconds", 60);
+            if (!ReminderLeadPolicy.valid(currentLead)) currentLead = 60;
             FrameTransaction.Result r = FrameTransaction.commit(frameAdapter(), frame.id, frame.sessionId, frame.windowId,
-                    frame.captureSequence, frame.captureUptimeMs, frame.captureWallMs, countdownMs, leadSeconds, avatarRef, plateRef);
+                    frame.captureSequence, frame.captureUptimeMs, frame.captureWallMs, countdownMs, currentLead, avatarRef, plateRef);
             if (r.committed && r.added) try { new AlarmScheduler(context).rescheduleAll(); } catch (RuntimeException ignored) { }
             return new FrameOutcome(r.committed, r.replay, r.confirmed, r.added, r.reminders, r.code);
         }
