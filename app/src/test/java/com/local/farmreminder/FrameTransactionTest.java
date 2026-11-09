@@ -57,6 +57,21 @@ public class FrameTransactionTest {
         s.memory = copy(s.disk); s.durability.dirty = false;
     }
 
+    @Test public void threeMinuteLeadAppliesOnlyToNewRecordsAndSurvivesReopen() throws Exception {
+        Shared shared = new Shared(); Adapter adapter = new Adapter(shared);
+        FrameTransaction.Result old = FrameTransaction.commit(adapter, "old-lead", "s", 1, 1, 1, 1000,
+                "Alice", 600000L, 60);
+        assertTrue(old.committed); assertTrue(old.added);
+        long oldTrigger = old.reminder.triggerAt;
+        FrameTransaction.Result added = FrameTransaction.commit(adapter, "three-minute", "s", 1, 2, 2, 1000,
+                "Alice", 900000L, 180);
+        assertTrue(added.committed); assertTrue(added.added);
+        assertEquals(180000L, added.reminder.matureAt - added.reminder.triggerAt);
+        reopen(shared);
+        assertEquals(oldTrigger, shared.disk.items.get(0).triggerAt);
+        assertEquals(180000L, shared.disk.items.get(1).matureAt - shared.disk.items.get(1).triggerAt);
+    }
+
     @Test public void checkpointReopenReplayDeleteAndAck() throws Exception {
         Shared shared = new Shared(); Adapter first = new Adapter(shared);
         FrameTransaction.Result candidate = frame(first, "one", 1, "Alice", 10000L);
