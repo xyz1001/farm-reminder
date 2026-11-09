@@ -42,6 +42,8 @@ public class SupportPageEntryPolicyTest {
             assertTrue(copy.contains("同意"));
             assertTrue(copy.contains("保存"));
             assertTrue(copy.contains("打开微信"));
+            assertTrue(copy.contains("尝试打开微信扫一扫"));
+            assertTrue(copy.contains("未直达"));
             assertTrue(copy.contains("手动"));
             assertTrue(copy.contains("自愿"));
             assertTrue(copy.contains("不影响监测"));
