@@ -315,189 +315,234 @@ body {
   color: var(--primary);
 }
 
-/* Hero 右侧真机层叠模型 */
-.hero-preview {
-  position: relative;
+/* Hero 右侧：小巧规范指标卡片（纯文字排版，无任何截图） */
+.hero-side-card {
   display: flex;
   justify-content: center;
 }
 
-.hero-stack-wrapper {
-  position: relative;
-  width: 100%;
-  max-width: 380px;
-}
-
-.phone-frame {
-  width: 280px;
-  height: 520px;
-  background: #1e293b;
-  border-radius: 36px;
-  padding: 10px;
-  box-shadow: var(--shadow-device);
-  border: 3px solid #334155;
-  position: relative;
-  overflow: hidden;
-  margin: 0 auto;
-}
-
-.phone-status-bar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 2px 14px 6px;
-  font-size: 0.72rem;
-  font-weight: 600;
-  color: #0f172a;
-  background-color: #f7f9f7;
-}
-
-.phone-screen-scroll {
-  width: 100%;
-  height: calc(100% - 24px);
-  border-radius: 26px;
-  overflow-y: hidden;
-  background-color: #f7f9f7;
-  position: relative;
-}
-
-.img-app-screen {
-  width: 100%;
-  height: auto;
-  display: block;
-  object-fit: cover;
-  object-position: top;
-}
-
-/* 浮动在右上方的通知横幅 */
-.floating-notif-box {
-  position: absolute;
-  top: 80px;
-  right: -30px;
-  width: 290px;
-  background: rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(226, 232, 240, 0.8);
-  border-radius: var(--radius-md);
-  box-shadow: 0 16px 36px -6px rgba(15, 23, 42, 0.22);
-  padding: 8px;
-  z-index: 10;
-  animation: floatBanner 4s ease-in-out infinite;
-  transition: transform 0.2s ease;
-}
-
-.floating-notif-box:hover {
-  transform: scale(1.03) translateY(-3px);
-}
-
-@keyframes floatBanner {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-8px); }
-}
-
-.floating-notif-tag {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.72rem;
-  font-weight: 600;
-  color: #059669;
-  margin-bottom: 6px;
-  padding-left: 4px;
-}
-
-.pulse-dot {
-  width: 7px;
-  height: 7px;
-  background-color: #10b981;
-  border-radius: 50%;
-  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.3);
-}
-
-.img-notif-banner {
-  width: 100%;
-  height: auto;
-  border-radius: 8px;
-  display: block;
-}
-
-/* 真机展示 Showcase 板块 */
-.showcase-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 60px;
-}
-
-.showcase-card {
-  display: grid;
-  grid-template-columns: 360px 1fr;
-  gap: 50px;
-  align-items: center;
+.spec-card {
   background: #ffffff;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
-  padding: 36px;
+  padding: 24px;
   box-shadow: var(--shadow-md);
-}
-
-.showcase-card.reverse {
-  grid-template-columns: 1fr 440px;
-}
-
-.showcase-card.reverse .showcase-img-wrap {
-  order: 2;
-}
-
-.showcase-card.reverse .showcase-meta {
-  order: 1;
-}
-
-.showcase-img-wrap {
-  position: relative;
-  border-radius: var(--radius-md);
-  overflow: hidden;
-  box-shadow: var(--shadow-lg);
-  border: 1px solid var(--border-color);
-  background-color: #f8fafc;
-  cursor: zoom-in;
-  display: flex;
-  justify-content: center;
-}
-
-.showcase-img {
   width: 100%;
-  height: auto;
-  display: block;
-  transition: transform 0.3s ease;
+  max-width: 360px;
 }
 
-.showcase-img-tall {
-  max-height: 540px;
-  width: auto;
-  max-width: 100%;
-  object-fit: contain;
+.spec-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 18px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-color);
 }
 
-.showcase-img-wrap:hover .showcase-img {
-  transform: scale(1.02);
+.spec-card-title {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text-main);
+  letter-spacing: -0.01em;
 }
 
-.img-zoom-hint {
-  position: absolute;
-  bottom: 12px;
-  right: 12px;
-  background: rgba(15, 23, 42, 0.75);
-  color: #ffffff;
+.spec-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.spec-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.spec-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.1rem;
+  flex-shrink: 0;
+}
+
+.spec-icon.green { background: #d1fae5; }
+.spec-icon.blue { background: #dbeafe; }
+.spec-icon.orange { background: #ffedd5; }
+.spec-icon.purple { background: #f3e8ff; }
+
+.spec-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.spec-label {
   font-size: 0.75rem;
-  padding: 4px 10px;
+  color: var(--text-muted);
+}
+
+.spec-val {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+/* 真实运行效果 Showcase 板块（全站唯一出现截图的地方，双列小巧展台） */
+.showcase-columns {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 32px;
+}
+
+.showcase-box {
+  background: #ffffff;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  display: flex;
+  flex-direction: column;
+}
+
+.showcase-box:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-md);
+  border-color: #cbd5e1;
+}
+
+/* 展台底座：精致轻浅渐变背景 */
+.showcase-stage {
+  background: linear-gradient(180deg, #f8fafc 0%, #edf2f7 100%);
+  padding: 30px 20px;
+  min-height: 270px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  cursor: zoom-in;
+}
+
+.stage-tag {
+  position: absolute;
+  top: 12px;
+  left: 14px;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(4px);
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  border: 1px solid rgba(226, 232, 240, 0.8);
+}
+
+.stage-hover-hint {
+  position: absolute;
+  bottom: 10px;
+  right: 12px;
+  background: rgba(15, 23, 42, 0.65);
+  color: #ffffff;
+  font-size: 0.7rem;
+  padding: 2px 7px;
   border-radius: var(--radius-full);
   pointer-events: none;
-  backdrop-filter: blur(4px);
+  opacity: 0.85;
+}
+
+.stage-img {
+  transition: transform 0.25s ease;
+  display: block;
+}
+
+/* 严格约束图片尺寸：小巧、精致、协调，杜绝过大撑满容器 */
+.stage-img-app {
+  max-width: 140px;
+  width: 100%;
+  height: auto;
+  border-radius: 12px;
+  box-shadow: 0 10px 24px -4px rgba(15, 23, 42, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+}
+
+.stage-img-notif {
+  max-width: 200px;
+  width: 100%;
+  height: auto;
+  border-radius: 10px;
+  box-shadow: 0 10px 24px -4px rgba(15, 23, 42, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+}
+
+.showcase-stage:hover .stage-img {
+  transform: scale(1.04);
+}
+
+/* 展台说明区域 */
+.showcase-info {
+  padding: 24px 28px;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
 }
 
 .showcase-badge {
   display: inline-block;
+  align-self: flex-start;
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  margin-bottom: 12px;
+}
+
+.showcase-badge.green {
+  background-color: var(--primary-light);
+  color: #047857;
+  border: 1px solid var(--primary-border);
+}
+
+.showcase-badge.blue {
+  background-color: var(--secondary-light);
+  color: #1d4ed8;
+  border: 1px solid #bfdbfe;
+}
+
+.showcase-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin-bottom: 10px;
+  color: var(--text-main);
+  letter-spacing: -0.01em;
+}
+
+.showcase-desc {
+  font-size: 0.95rem;
+  color: var(--text-muted);
+  line-height: 1.6;
+  margin-bottom: 16px;
+}
+
+.showcase-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.showcase-list li {
+  font-size: 0.88rem;
+  color: #334155;
+}
+
+.showcase-list strong {
+  color: var(--text-main);
+}
   font-size: 0.8rem;
   font-weight: 700;
   padding: 4px 12px;
@@ -960,19 +1005,11 @@ body {
   .hero-preview {
     margin-top: 20px;
   }
-  .showcase-card, .showcase-card.reverse {
+  .showcase-columns {
     grid-template-columns: 1fr;
-    padding: 24px;
+    gap: 24px;
   }
-  .showcase-card.reverse .showcase-img-wrap {
-    order: 1;
-  }
-  .showcase-card.reverse .showcase-meta {
-    order: 2;
-  }
-  .showcase-img-tall {
-    max-height: 380px;
-  }
+  
   .features-grid {
     grid-template-columns: repeat(2, 1fr);
   }
