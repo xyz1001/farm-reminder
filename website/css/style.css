@@ -418,8 +418,8 @@ body {
 /* 展台底座：精致轻浅渐变背景 */
 .showcase-stage {
   background: linear-gradient(180deg, #f8fafc 0%, #edf2f7 100%);
-  padding: 18px 14px;
-  min-height: 145px;
+  padding: 22px 16px;
+  min-height: 230px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -443,43 +443,47 @@ body {
 
 .stage-hover-hint {
   position: absolute;
-  bottom: 8px;
-  right: 10px;
-  background: rgba(15, 23, 42, 0.65);
+  bottom: 10px;
+  right: 12px;
+  background: rgba(15, 23, 42, 0.7);
   color: #ffffff;
-  font-size: 0.65rem;
-  padding: 2px 6px;
+  font-size: 0.68rem;
+  padding: 3px 8px;
   border-radius: var(--radius-full);
   pointer-events: none;
-  opacity: 0.85;
+  opacity: 0.9;
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .stage-img {
   transition: transform 0.25s ease;
   display: block;
+  cursor: zoom-in;
 }
 
-/* 严格约束图片尺寸：再缩小至一半，呈现小巧微缩预览，绝不抢占视觉中心 */
+/* 黄金适中比例：既清晰可见文字细节，又轻巧精致不笨拙 */
 .stage-img-app {
-  max-width: 70px;
+  max-width: 105px;
   width: 100%;
   height: auto;
-  border-radius: 8px;
-  box-shadow: 0 6px 14px -2px rgba(15, 23, 42, 0.18);
+  border-radius: 10px;
+  box-shadow: 0 8px 18px -3px rgba(15, 23, 42, 0.18);
   border: 1px solid rgba(255, 255, 255, 0.9);
 }
 
 .stage-img-notif {
-  max-width: 100px;
+  max-width: 155px;
   width: 100%;
   height: auto;
-  border-radius: 6px;
-  box-shadow: 0 6px 14px -2px rgba(15, 23, 42, 0.18);
+  border-radius: 8px;
+  box-shadow: 0 8px 18px -3px rgba(15, 23, 42, 0.18);
   border: 1px solid rgba(255, 255, 255, 0.9);
 }
 
 .showcase-stage:hover .stage-img {
-  transform: scale(1.08);
+  transform: scale(1.05);
 }
 
 /* 展台说明区域 */
