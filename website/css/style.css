@@ -473,9 +473,10 @@ body {
 }
 
 .showcase-img-tall {
-  max-height: 480px;
-  object-fit: cover;
-  object-position: top;
+  max-height: 540px;
+  width: auto;
+  max-width: 100%;
+  object-fit: contain;
 }
 
 .showcase-img-wrap:hover .showcase-img {
