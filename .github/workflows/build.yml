@@ -22,6 +22,8 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
       - name: Install Android SDK packages
         run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
       - name: Build and check
@@ -59,6 +61,8 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
       - name: Install Android build tools
         run: sdkmanager 'build-tools;35.0.0'
       - uses: actions/download-artifact@v4
@@ -107,3 +111,44 @@ jobs:
           sha256sum farm-reminder.apk > SHA256SUMS
           gh release create --verify-tag --generate-notes --draft -- "$TAG" farm-reminder.apk SHA256SUMS
           gh release edit --draft=false -- "$TAG"
+
+  deploy-website:
+    if: |
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 若为 tag 发布，自动注入该 tag 的版本与免流加速下载直链
+      - name: Inject latest version and download links
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          TAG="${{ github.ref_name }}"
+          PROXY_URL="https://ghproxy.net/https://github.com/${{ github.repository }}/releases/download/${TAG}/farm-reminder.apk"
+          RAW_URL="https://github.com/${{ github.repository }}/releases/download/${TAG}/farm-reminder.apk"
+
+          sed -i "s|const DOWNLOAD_APK_URL = \".*\";|const DOWNLOAD_APK_URL = \"${PROXY_URL}\";|g" website/js/main.js
+          sed -i "s|const GITHUB_RAW_URL = \".*\";|const GITHUB_RAW_URL = \"${RAW_URL}\";|g" website/js/main.js
+          sed -i "s|<span class=\"version-tag\">.*</span>|<span class=\"version-tag\">${TAG}</span>|g" website/index.html
+          echo "Website updated for release ${TAG}"
+
+      # 通过 SSH 与 Rsync 自动同步至韩国服务器静态目录（极速增量传输）
+      - name: Deploy website to server via SSH
+        env:
+          SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          HOST: ${{ secrets.SERVER_HOST }}
+          USER: ${{ secrets.SERVER_USER }}
+          PORT: ${{ secrets.SERVER_PORT || '22' }}
+        run: |
+          if [ -z "$SSH_KEY" ] || [ -z "$HOST" ] || [ -z "$USER" ]; then
+            echo "::warning ::SERVER_SSH_KEY, SERVER_HOST or SERVER_USER secret is not configured. Skipping website deployment."
+            exit 0
+          fi
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H -p "$PORT" "$HOST" >> ~/.ssh/known_hosts
+          rsync -avz --delete -e "ssh -i ~/.ssh/deploy_key -p $PORT -o StrictHostKeyChecking=accept-new" website/ ${USER}@${HOST}:/var/www/farm.xyz1001.top/
+          echo "Website deployed to /var/www/farm.xyz1001.top/ successfully!"
