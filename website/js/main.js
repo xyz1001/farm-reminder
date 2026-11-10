@@ -29,17 +29,41 @@ function closeDownloadModal() {
   }
 }
 
-// 监听 ESC 键关闭弹窗
+// 图片灯箱放大逻辑
+function openLightbox(src, title) {
+  const modal = document.getElementById("lightbox-modal");
+  const img = document.getElementById("lightbox-img");
+  const titleEl = document.getElementById("lightbox-title");
+  if (modal && img) {
+    img.src = src;
+    if (titleEl && title) {
+      titleEl.textContent = title;
+    }
+    modal.style.display = "flex";
+    document.body.style.overflow = "hidden";
+  }
+}
+
+function closeLightbox() {
+  const modal = document.getElementById("lightbox-modal");
+  if (modal) {
+    modal.style.display = "none";
+    document.body.style.overflow = "";
+  }
+}
+
+// 监听 ESC 键关闭所有弹窗
 document.addEventListener("keydown", function(e) {
   if (e.key === "Escape") {
     closeDownloadModal();
+    closeLightbox();
   }
 });
 
-// 点击弹窗外部阴影关闭
+// 点击下载弹窗外部阴影关闭
 document.addEventListener("click", function(e) {
-  const modal = document.getElementById("download-modal");
-  if (modal && e.target === modal) {
+  const downloadModal = document.getElementById("download-modal");
+  if (downloadModal && e.target === downloadModal) {
     closeDownloadModal();
   }
 });

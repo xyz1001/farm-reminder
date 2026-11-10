@@ -18,6 +18,7 @@
         <span class="brand-name">农场提醒 <span class="brand-badge">Farm Reminder</span></span>
       </a>
       <nav class="nav-links">
+        <a href="#showcase">运行效果</a>
         <a href="#features">核心特性</a>
         <a href="#security">安全对比</a>
         <a href="#guide">使用指引</a>
@@ -75,36 +76,78 @@
         </p>
       </div>
 
+      <!-- Hero 实际截图展示 -->
       <div class="hero-preview">
-        <div class="phone-card">
-          <div class="phone-card-header">
-            <span class="status-dot"></span>
-            <span class="card-title">农场成熟提醒通知卡片预览</span>
-          </div>
-          <div class="notification-sample">
-            <div class="notif-header">
-              <img src="assets/logo.png" alt="App Icon" class="notif-icon">
-              <span class="notif-app-name">农场提醒 · 成熟提醒</span>
-              <span class="notif-time">刚刚</span>
+        <div class="hero-stack-wrapper">
+          <!-- 底层手机真机界面 -->
+          <div class="phone-frame">
+            <div class="phone-status-bar">
+              <span class="status-time">09:07</span>
+              <span class="status-icons">5G 📶 98%</span>
             </div>
-            <div class="notif-title">🍎 好友农场即将成熟</div>
-            <div class="notif-body">
-              【张三的农田】红土地种植的「金银花」将在 <strong>1 分钟后</strong> 成熟，请及时前往收菜！
-            </div>
-            <div class="notif-action-btn">
-              <span>一键进入微信</span>
+            <div class="phone-screen-scroll">
+              <img src="assets/screenshot_app.png" alt="农场提醒应用内运行截图" class="img-app-screen">
             </div>
           </div>
-          <div class="mini-feature-list">
-            <div class="mini-feature-item">
-              <span class="check-icon">✓</span> 纯只读识别，不干扰游戏
+          <!-- 悬浮在右上方的真实系统通知横幅 -->
+          <div class="floating-notif-box">
+            <div class="floating-notif-tag">
+              <span class="pulse-dot"></span>
+              <span>实际系统成熟横幅</span>
             </div>
-            <div class="mini-feature-item">
-              <span class="check-icon">✓</span> 离线沙盒，数据不出手机
-            </div>
-            <div class="mini-feature-item">
-              <span class="check-icon">✓</span> 提前响铃，准点防被偷
-            </div>
+            <img src="assets/screenshot_notif.png" alt="农场提醒系统通知横幅截图" class="img-notif-banner">
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 实际运行界面展示 Showcase -->
+  <section class="section" id="showcase">
+    <div class="container">
+      <div class="section-header text-center">
+        <h2 class="section-title">真实运行效果展示</h2>
+        <p class="section-desc">真机实测运行截图，直观感受轻量极简的使用体验</p>
+      </div>
+
+      <div class="showcase-grid">
+        <!-- 展示卡片 1：应用内管理 -->
+        <div class="showcase-card">
+          <div class="showcase-img-wrap">
+            <img src="assets/screenshot_app.png" alt="应用内提醒列表界面" class="showcase-img showcase-img-tall" onclick="openLightbox('assets/screenshot_app.png', '应用内管理界面')">
+            <div class="img-zoom-hint">点击查看大图</div>
+          </div>
+          <div class="showcase-meta">
+            <div class="showcase-badge green">应用内界面 · 纯粹简洁</div>
+            <h3 class="showcase-heading">自动捕获头像、等级与倒计时</h3>
+            <p class="showcase-p">
+              进入农场查看好友作物后，应用在后台自动完成文字识别。不仅精准记录成熟时刻，还自动提取好友头像、农场等级（如 124 级、139 级）与经验进度，谁的农田即将成熟一览无遗。
+            </p>
+            <ul class="showcase-bullets">
+              <li>✓ <strong>分组管理</strong>：清晰展示当前正在监测的倒计时组数</li>
+              <li>✓ <strong>智能提前</strong>：支持成熟时、提前 1/3/5 分钟提醒</li>
+              <li>✓ <strong>自动保洁</strong>：成熟 60 秒后自动清理过期记录</li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- 展示卡片 2：系统通知 -->
+        <div class="showcase-card reverse">
+          <div class="showcase-img-wrap">
+            <img src="assets/screenshot_notif.png" alt="系统成熟横幅通知" class="showcase-img" onclick="openLightbox('assets/screenshot_notif.png', '系统悬浮通知')">
+            <div class="img-zoom-hint">点击查看大图</div>
+          </div>
+          <div class="showcase-meta">
+            <div class="showcase-badge blue">系统通知 · 一键收菜</div>
+            <h3 class="showcase-heading">高优先级悬浮横幅，快人一步</h3>
+            <p class="showcase-p">
+              到期前夕系统弹出横幅与轻微振动，不仅标明具体成熟时间与好友农场信息，还贴心提供快捷操作按钮：点击<strong>「打开微信」</strong>直接返回游戏收菜！
+            </p>
+            <ul class="showcase-bullets">
+              <li>✓ <strong>原生横幅</strong>：息屏深度睡眠分秒不差准时响铃</li>
+              <li>✓ <strong>快捷跳转</strong>：自带一键唤醒微信快捷操作</li>
+              <li>✓ <strong>零多余骚扰</strong>：仅在作物临熟时提醒，不推广告</li>
+            </ul>
           </div>
         </div>
       </div>
@@ -112,7 +155,7 @@
   </section>
 
   <!-- 核心优势卡片 -->
-  <section class="section" id="features">
+  <section class="section bg-alt" id="features">
     <div class="container">
       <div class="section-header text-center">
         <h2 class="section-title">为什么选择「农场提醒」？</h2>
@@ -203,7 +246,7 @@
   </section>
 
   <!-- 本应用 vs 传统外挂 对比表格 -->
-  <section class="section bg-alt" id="security">
+  <section class="section" id="security">
     <div class="container">
       <div class="section-header text-center">
         <h2 class="section-title">安全与隐私声明</h2>
@@ -262,7 +305,7 @@
   </section>
 
   <!-- 3步上手指南 -->
-  <section class="section" id="guide">
+  <section class="section bg-alt" id="guide">
     <div class="container">
       <div class="section-header text-center">
         <h2 class="section-title">三步快速上手</h2>
@@ -298,7 +341,7 @@
   </section>
 
   <!-- 常见问题 FAQ -->
-  <section class="section bg-alt" id="faq">
+  <section class="section" id="faq">
     <div class="container">
       <div class="section-header text-center">
         <h2 class="section-title">常见问题解答 (FAQ)</h2>
@@ -404,6 +447,19 @@
           <a href="https://github.com/xyz1001/farm-reminder/releases" target="_blank" rel="noopener" class="btn btn-primary" onclick="closeDownloadModal()">前往 GitHub Releases 下载</a>
           <button class="btn btn-secondary" onclick="closeDownloadModal()">稍后再看</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 图片灯箱 Lightbox Modal -->
+  <div id="lightbox-modal" class="modal-backdrop" style="display: none;" onclick="closeLightbox()">
+    <div class="lightbox-card" onclick="event.stopPropagation()">
+      <div class="lightbox-header">
+        <span id="lightbox-title" class="lightbox-title">查看截图</span>
+        <button class="modal-close" onclick="closeLightbox()">&times;</button>
+      </div>
+      <div class="lightbox-body">
+        <img id="lightbox-img" src="" alt="放大截图" class="lightbox-image">
       </div>
     </div>
   </div>
