@@ -128,6 +128,7 @@
 ## 📦 自动构建与发布
 
 - 推送分支、创建或更新 PR，以及在 Actions 中手动运行工作流时，自动执行单元测试、Debug 构建和 Lint；APK 和检查报告可在该次运行的 Artifacts 中下载。
+- 分支推送或非 tag 的手动构建检查成功后、上传新产物前，会删除本工作流上一次非 release 构建的 CI 产物；不会删除 release 产物或其他仓库的文件。PR 构建使用只读权限，不执行清理。账号存储配额刷新可能延迟 6–12 小时，清理不保证立即恢复上传。
 - **推送任意 tag 后自动发布 GitHub Release**：检查通过后，使用固定证书重新签名 APK，校验证书指纹，并上传安装包和 SHA-256 校验文件。沿用当前本地构建方式，发布的是重新签名的 **Debug APK**，不是 Release 构建。普通 CI 的 APK 使用临时 Debug 证书，不适合用于覆盖安装正式发布版本。
 - 首次发布前，在仓库 **Settings → Secrets and variables → Actions** 添加以下 Repository secrets（文件原始字节的 Base64）：
 
