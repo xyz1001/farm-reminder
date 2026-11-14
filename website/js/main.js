@@ -2,9 +2,9 @@
  * 农场提醒 (Farm Reminder) 官网交互脚本
  */
 
-// 配置：由 GitHub Actions 在发布 tag 时自动注入最新版本直链
-const DOWNLOAD_APK_URL = ""; 
-const GITHUB_RAW_URL = "";   
+// 配置：默认配置当前稳定版直链，由 GitHub Actions 自动更新为最新版本
+const DOWNLOAD_APK_URL = "https://ghproxy.net/https://github.com/xyz1001/farm-reminder/releases/download/v1.0.0/farm-reminder.apk"; 
+const GITHUB_RAW_URL = "https://github.com/xyz1001/farm-reminder/releases/download/v1.0.0/farm-reminder.apk";   
 
 function handleDownloadClick() {
   if (DOWNLOAD_APK_URL && DOWNLOAD_APK_URL.trim() !== "") {

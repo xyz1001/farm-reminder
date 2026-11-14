@@ -188,12 +188,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      # 若为 tag 发布，自动注入该 tag 的版本与免流加速下载直链
+      # 自动注入当前发布 tag 或最新稳定 tag 的版本与免流加速下载直链
       - name: Inject latest version and download links
-        if: startsWith(github.ref, 'refs/tags/')
         run: |
-          TAG="${{ github.ref_name }}"
+          if [ "${{ startsWith(github.ref, 'refs/tags/') }}" = "true" ]; then
+            TAG="${{ github.ref_name }}"
+          else
+            TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v1.0.0")
+          fi
+          echo "Using release tag: ${TAG}"
           PROXY_URL="https://ghproxy.net/https://github.com/${{ github.repository }}/releases/download/${TAG}/farm-reminder.apk"
           RAW_URL="https://github.com/${{ github.repository }}/releases/download/${TAG}/farm-reminder.apk"
 
