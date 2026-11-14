@@ -315,6 +315,35 @@ body {
   color: var(--primary);
 }
 
+.hero-community {
+  margin-top: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  background: #f8fafc;
+  padding: 6px 14px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-color);
+  width: fit-content;
+}
+
+.hero-community strong {
+  color: var(--primary);
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.community-tag {
+  background: #e2e8f0;
+  color: var(--text-main);
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+}
+
 /* Hero 右侧：小巧规范指标卡片（纯文字排版，无任何截图） */
 .hero-side-card {
   display: flex;
@@ -840,6 +869,20 @@ body {
   color: #64748b;
 }
 
+.footer-qq-group {
+  margin-top: 12px;
+  font-size: 0.875rem;
+  color: #94a3b8;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.footer-qq-group span {
+  color: #f1f5f9;
+  font-weight: 600;
+}
+
 .footer-right {
   display: flex;
   flex-direction: column;
@@ -1005,6 +1048,9 @@ body {
   }
   .download-tip {
     justify-content: center;
+  }
+  .hero-community {
+    margin: 14px auto 0;
   }
   .hero-preview {
     margin-top: 20px;

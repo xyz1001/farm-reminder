@@ -1,7 +1,8 @@
 # 农场提醒 (Farm Reminder)
 
 > 🍃 **轻量辅助 · 纯本地离线 · 零数据上传 · 绝无封号风险**  
-> 专为微信小程序《QQ经典农场》打造的作物成熟提醒工具。
+> 专为微信小程序《QQ经典农场》打造的作物成熟提醒工具。  
+> 💬 **QQ经典农场自动提醒反馈群：1135966662**
 
 ---
 
@@ -122,6 +123,13 @@
   ```powershell
   pwsh -NoProfile -File scripts/Sign-Apk.ps1 -KeyFile "<密钥目录>/farm-reminder.pk8" -CertFile "<密钥目录>/farm-reminder.x509.pem" -SdkRoot "<Android SDK 目录>"
   ```
+
+---
+
+## 💬 交流与反馈
+
+- **QQ经典农场自动提醒反馈群**：`1135966662`
+- 如果您在使用中遇到任何问题、偶发识别异常或有新建议，欢迎加入反馈群交流，也可以在 GitHub 提交 [Issue](https://github.com/xyz1001/farm-reminder/issues)。
 
 ---
 
